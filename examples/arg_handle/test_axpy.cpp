@@ -70,3 +70,23 @@ TEST(arg_handle_test, optional_tensor_nullopt) {
   at::Tensor result2 = alpha * a;
   EXPECT_TRUE(torch::allclose(result1, result2));
 }
+
+TEST(arg_handle_test_manual, optional_tensor_has_value) {
+  at::Tensor a = at::rand({128 * 1024}, at::kCUDA);
+  std::optional<at::Tensor> b = at::rand({128 * 1024}, at::kCUDA);
+
+  c10::Scalar alpha(3.14);
+  at::Tensor result1 = my_ops::axpy3_manual(a, b, alpha);
+  at::Tensor result2 = at::add(alpha * a, b.value());
+  EXPECT_TRUE(torch::allclose(result1, result2));
+}
+
+TEST(arg_handle_test_manual, optional_tensor_nullopt) {
+  at::Tensor a = at::rand({128 * 1024}, at::kCUDA);
+  std::optional<at::Tensor> b = std::nullopt;
+
+  c10::Scalar alpha(3.14);
+  at::Tensor result1 = my_ops::axpy3_manual(a, b, alpha);
+  at::Tensor result2 = alpha * a;
+  EXPECT_TRUE(torch::allclose(result1, result2));
+}
