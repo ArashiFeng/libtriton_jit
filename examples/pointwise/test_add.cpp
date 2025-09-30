@@ -1,6 +1,6 @@
 
 #include "add_op.h"
-#include "c10/cuda/CUDAFunctions.h"
+#include "generated_cuda_compatible/c10/musa/MUSA_PORT_Functions.h"
 #include "torch/torch.h"
 
 int main() {
@@ -10,14 +10,14 @@ int main() {
   at::Tensor result1 = my_ops::add_tensor(a, b);
   at::Tensor result2 = at::add(a, b);
 
-  c10::cuda::device_synchronize();
+  c10::musa::device_synchronize();
   for (int i = 0; i < 10; ++i) {
     auto tmp = at::add(a, b);
   }
-  c10::cuda::device_synchronize();
+  c10::musa::device_synchronize();
   for (int i = 0; i < 10; ++i) {
     auto tmp = my_ops::add_tensor(a, b);
   }
-  c10::cuda::device_synchronize();
+  c10::musa::device_synchronize();
   return 0;
 }

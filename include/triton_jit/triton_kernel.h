@@ -4,7 +4,17 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#ifdef __NVIDIA__
 #include "cuda.h"
+using StreamType = CUstream;
+using ModuleType = CUmodule;
+using FunctionType = CUfunction;
+#elif defined(__MTHREADS__)
+#include "musa.h"
+using StreamType = MUstream;
+using ModuleType = MUmodule;
+using FunctionType = MUfunction;
+#endif
 #include "triton_jit/jit_utils.h"
 
 namespace triton_jit {
@@ -20,8 +30,8 @@ class TritonKernel {
   unsigned int shared_; /* amount of static shared memory per block (in bytes) required for the cubin*/
   unsigned int arch_;   /* cuda arch */
 
-  mutable CUmodule mod_;
-  mutable CUfunction fn_;
+  mutable ModuleType mod_;
+  mutable FunctionType fn_;
   mutable bool loaded_ = false;
 
  public:
@@ -35,7 +45,7 @@ class TritonKernel {
               unsigned int grid_y,
               unsigned int grid_z,
               int num_warps,
-              CUstream stream,
+              StreamType stream,
               void** args) const;
   friend TritonJITFunction;
 

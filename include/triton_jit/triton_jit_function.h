@@ -18,7 +18,11 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#ifdef __NVIDIA__
 #include "cuda.h"
+#elif defined(__MTHREADS__)
+#include "musa.h"
+#endif
 
 #include "fmt/core.h"
 #include "triton_jit/jit_utils.h"
@@ -76,8 +80,17 @@ class TritonJITFunction {
   TritonJITFunction(TritonJITFunction &&) = default;
   TritonJITFunction &operator=(TritonJITFunction &&) = default;
 
+
+  #ifdef __NVIDIA__
+  using StreamType = CUstream;
+  using DeviceType = CUdevice;
+  #elif defined(__MTHREADS__)
+  using StreamType = MUstream;
+  using DeviceType = MUdevice;
+  #endif
+
   template <typename... Args>
-  void operator()(CUstream stream,
+  void operator()(StreamType stream,
                   unsigned int grid_x,
                   unsigned int grid_y,
                   unsigned int grid_z,
@@ -91,7 +104,7 @@ class TritonJITFunction {
    * designed to be used manual argument processing. An argument-buffer-like design is working in
    * progress now to support more flexible argument processing.
    */
-  void launch_with_raw_args(CUstream stream,
+  void launch_with_raw_args(StreamType stream,
                             unsigned int grid_x,
                             unsigned int grid_y,
                             unsigned int grid_z,
@@ -110,7 +123,7 @@ class TritonJITFunction {
   const TritonKernel &get_kernel(std::string_view signature,
                                  int num_warps,
                                  int num_stages,
-                                 CUdevice device_index) const;
+                                 DeviceType device_index) const;
 };
 
 struct ArgHandle {
@@ -162,8 +175,10 @@ struct ArgHandle {
       handle_arg_plain(*reinterpret_cast<const bool *>(p));
     } else if (tp == c10::ScalarType::Long) {
       handle_arg_plain(*reinterpret_cast<const int64_t *>(p));
+    #ifdef __NVIDIA__
     } else if (tp == c10::ScalarType::UInt64) {
       handle_arg_plain(*reinterpret_cast<const uint64_t *>(p));
+    #endif
     } else if (tp == c10::ScalarType::Double) {
       handle_arg_plain(*reinterpret_cast<const double *>(p));
     } else {
@@ -255,7 +270,7 @@ struct ArgHandle {
  * customization point: compile options for different backends may be different.
  */
 template <typename... Args>
-void TritonJITFunction::operator()(CUstream stream,
+void TritonJITFunction::operator()(StreamType stream,
                                    unsigned int grid_x,
                                    unsigned int grid_y,
                                    unsigned int grid_z,
@@ -295,9 +310,15 @@ void TritonJITFunction::operator()(CUstream stream,
   // LOG(INFO) << "raw_args_list.size(): " << kernel_args.size() << std::endl;
 
   // TODO: use torch backend-agnostic device APIs
+  #ifdef __NVIDIA__
   ensure_cuda_context();
   CUdevice device_index;
   checkCudaErrors(cuCtxGetDevice(&device_index));
+  #elif defined(__MTHREADS__)
+  ensure_musa_context();
+  MUdevice device_index;
+  checkMusaErrors(muCtxGetDevice(&device_index));
+  #endif
   const TritonKernel &kernel = this->get_kernel(full_signature, num_warps, num_stages, device_index);
   kernel.launch(grid_x, grid_y, grid_z, num_warps, stream, kernel_args.data());
   return;

@@ -13,6 +13,14 @@
 
 #include "pybind11/embed.h"
 
+#ifdef __NVIDIA__
+using StreamType = CUstream;
+using DeviceType = CUdevice;
+#elif defined(__MTHREADS__)
+using StreamType = MUstream;
+using DeviceType = MUdevice;
+#endif
+
 namespace triton_jit {
 std::unordered_map<std::string, TritonJITFunction> TritonJITFunction::functions_;
 
@@ -55,7 +63,7 @@ TritonJITFunction::TritonJITFunction(std::string_view path, std::string_view nam
 const TritonKernel& TritonJITFunction::get_kernel(std::string_view _signature,
                                                   int num_warps,
                                                   int num_stages,
-                                                  CUdevice device_index) const {
+                                                  DeviceType device_index) const {
   std::string signature(_signature);
   std::string key = fmt::format("{};{}", signature, device_index);
   auto pos = this->overloads_.find(key);
@@ -104,6 +112,7 @@ TritonJITFunction& TritonJITFunction::get_instance(std::string_view path, std::s
   return pos->second;
 }
 
+#ifdef __NVIDIA__
 void TritonJITFunction::launch_with_raw_args(CUstream stream,
                                              unsigned int grid_x,
                                              unsigned int grid_y,
@@ -121,4 +130,23 @@ void TritonJITFunction::launch_with_raw_args(CUstream stream,
   const TritonKernel& kernel = this->get_kernel(full_signature, num_warps, num_stages, d);
   kernel.launch(grid_x, grid_y, grid_z, num_warps, stream, args);
 }
+#elif defined(__MTHREADS__)
+void TritonJITFunction::launch_with_raw_args(MUstream stream,
+                                             unsigned int grid_x,
+                                             unsigned int grid_y,
+                                             unsigned int grid_z,
+                                             unsigned int num_warps,
+                                             unsigned int num_stages,
+                                             std::string full_signature,
+                                             void** args) const {
+  MUcontext ctx;
+  checkMusaErrors(muStreamGetCtx(stream, &ctx));
+  checkMusaErrors(muCtxSetCurrent(ctx));
+  MUdevice d;
+  checkMusaErrors(muCtxGetDevice(&d));
+  // LOG(INFO) << fmt::format("launching kernel");
+  const TritonKernel& kernel = this->get_kernel(full_signature, num_warps, num_stages, d);
+  kernel.launch(grid_x, grid_y, grid_z, num_warps, stream, args);
+}
+#endif
 }  // namespace triton_jit

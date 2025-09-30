@@ -10,9 +10,17 @@ target_include_directories(triton_jit
   PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
-target_link_libraries(triton_jit
-  PUBLIC Torch::Torch CUDA::cuda_driver fmt::fmt-header-only
-  PRIVATE nlohmann_json::nlohmann_json pybind11::embed)
+if ((LIBTRITON_JIT_BACKEND STREQUAL "mthreads"))
+  target_include_directories(triton_jit
+    PUBLIC ${MUSA_TOOLKIT_INCLUDE})
+  target_link_libraries(triton_jit
+    PUBLIC Torch::Torch fmt::fmt-header-only
+    PRIVATE nlohmann_json::nlohmann_json pybind11::embed)
+else()
+  target_link_libraries(triton_jit
+    PUBLIC Torch::Torch CUDA::cuda_driver fmt::fmt-header-only
+    PRIVATE nlohmann_json::nlohmann_json pybind11::embed)
+endif()
 
 # --------------------------- alias targets ---------------------------
 # This is the target used in FetchContent, since FetchContent use add_subdirectory (a sub project build)

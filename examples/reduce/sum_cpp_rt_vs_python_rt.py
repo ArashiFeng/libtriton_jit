@@ -1,7 +1,9 @@
 import torch
 import triton
+import torch_musa
 from triton import language as tl
 
+torch.ops.load_library("libsum_op.so")
 
 @triton.jit
 def sum_kernel(
@@ -82,7 +84,7 @@ def sum_dim(inp, dim=None, keepdim=False, *, dtype=None):
     out = torch.empty(shape, dtype=dtype, device=inp.device)
 
     grid = lambda meta: (triton.cdiv(M, meta["BLOCK_M"]),)
-    with torch.cuda.device(inp.device):
+    with torch.musa.device(inp.device):
         sum_kernel[grid](inp, out, M, N, BLOCK_M=4, BLOCK_N=512, STAGE=2, num_warps=8)
     if not keepdim:
         out = out.squeeze(dim=dim)
@@ -90,25 +92,18 @@ def sum_dim(inp, dim=None, keepdim=False, *, dtype=None):
 
 
 if __name__ == "__main__":
-    torch_ops_my_ops_sum_dim = torch.library.custom_op(
-        "my_ops::sum.dim_IntList",
-        mutates_args=(),
-        device_types="cuda",
-        # the scheme should not include op name
-        schema="(Tensor self, int[1]? dim, bool keepdim=False, *, ScalarType? dtype=None) -> Tensor",
-    )(sum_dim)
-    x = torch.randn(16, 4 * 1024, device="cuda")
-    result1 = sum_dim(x, [1])
-    result2 = torch.sum(x, [1])
-    result3 = torch.ops.my_ops.sum_dim_IntList(x, [1])
+    x = torch.randn(16, 4 * 1024, device="musa")
+    result1 = torch.ops.my_ops.sum.dim_IntList(x, [1])
+    result2 = sum_dim(x, [1])
 
-    torch.cuda.synchronize()
-    for _ in range(10):
-        torch.sum(x, [1])
-    torch.cuda.synchronize()
+    # print(result1)
+    # print(result2)
+    # print(f"torch.allclose: {torch.allclose(result1, result2)}")
+
+    torch.musa.synchronize()
     for _ in range(10):
         sum_dim(x, [1])
-    torch.cuda.synchronize()
+    torch.musa.synchronize()
     for _ in range(10):
-        torch.ops.my_ops.sum_dim_IntList(x, [1])
-    torch.cuda.synchronize()
+        torch.ops.my_ops.sum.dim_IntList(x, [1])
+    torch.musa.synchronize()

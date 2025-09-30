@@ -4,6 +4,11 @@ from pathlib import Path
 from typing import List, Tuple, Union
 
 import torch
+import os
+LIBTRITON_JIT_BACKEND = "nvidia"
+if os.getenv("LIBTRITON_JIT_BACKEND", "nvidia") == "mthreads":
+    LIBTRITON_JIT_BACKEND = "mthreads"
+    import torch_musa
 import triton
 from packaging.version import Version
 
@@ -33,7 +38,10 @@ and argument 2 is assumed to be a compile-time constant of value 1024, i.e. it w
 # backends/nvidia/driver.py
 def ty_to_cpp(ty):
     if ty[0] == "*":
-        return "CUdeviceptr"
+        if LIBTRITON_JIT_BACKEND == "nvidia":
+            return "CUdeviceptr"
+        elif LIBTRITON_JIT_BACKEND == "mthreads":
+            return "MUdeviceptr"
     return {
         "i1": "int32_t",
         "i8": "int8_t",
@@ -222,14 +230,24 @@ def _compile_a_kernel(
     # STEP2: compile options for the backend
     opts = {"num_warps": num_warps, "num_stages": num_stages}
 
-    with torch.cuda.device(device_id):
-        # STEP3: ast source, target, compile options
-        target: triton.backends.compiler.GPUTarget = (
-            triton.runtime.driver.active.get_current_target()
-        )
-        ccinfo: triton.compiler.CompiledKernel = triton.compile(
-            src, target, options=opts
-        )
+    if LIBTRITON_JIT_BACKEND == "nvidia":
+        with torch.cuda.device(device_id):
+            # STEP3: ast source, target, compile options
+            target: triton.backends.compiler.GPUTarget = (
+                triton.runtime.driver.active.get_current_target()
+            )
+            ccinfo: triton.compiler.CompiledKernel = triton.compile(
+                src, target, options=opts
+            )
+    elif LIBTRITON_JIT_BACKEND == "mthreads":
+        with torch.musa.device(device_id):
+            # STEP3: ast source, target, compile options
+            target: triton.backends.compiler.GPUTarget = (
+                triton.runtime.driver.active.get_current_target()
+            )
+            ccinfo: triton.compiler.CompiledKernel = triton.compile(
+                src, target=target, options=opts # triton_musa's bug
+            )
 
     # kernel's hash may not equals the dir in cache
     from triton.runtime.cache import get_cache_manager

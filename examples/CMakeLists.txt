@@ -1,4 +1,6 @@
 add_subdirectory(pointwise)
 add_subdirectory(reduce)
-add_subdirectory(arg_handle)
-add_subdirectory(pointwise_raw)
+if (NOT LIBTRITON_JIT_BACKEND STREQUAL "mthreads")
+  add_subdirectory(arg_handle)
+  add_subdirectory(pointwise_raw)
+endif()

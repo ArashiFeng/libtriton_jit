@@ -1,5 +1,19 @@
-cmake_minimum_required(VERSION 3.26 FATAL_ERROR)
-project(TritonJIT LANGUAGES CUDA CXX VERSION 0.1.0)
+set(LIBTRITON_JIT_BACKEND "$ENV{LIBTRITON_JIT_BACKEND}")
+if (NOT LIBTRITON_JIT_BACKEND)
+  cmake_minimum_required(VERSION 3.26 FATAL_ERROR)
+  add_definitions(-D__NVIDIA__)
+  project(TritonJIT LANGUAGES CUDA CXX VERSION 0.1.0)
+elseif(LIBTRITON_JIT_BACKEND STREQUAL "mthreads")
+  cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
+  add_definitions(-D__MTHREADS__)
+  project(TritonJIT LANGUAGES CXX VERSION 0.1.0)
+  if(DEFINED ENV{MUSA_HOME})
+    set(MUSA_HOME $ENV{MUSA_HOME})
+  else()
+    set(MUSA_HOME "/usr/local/musa")
+  endif()
+  list(APPEND CMAKE_MODULE_PATH ${MUSA_HOME}/cmake)
+endif()
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake)
 
 # ------------------------------- project-wide settings -------------------------------
@@ -46,8 +60,13 @@ option(TRITON_JIT_INSTALL "whether to install the packages" ${PROJECT_IS_TOP_LEV
 
 # --------------------------- dependencies ---------------------------
 include(FetchContent)
-# dependencies: cuda toolkit
-find_package(CUDAToolkit REQUIRED COMPONENTS cuda_driver)
+if(NOT LIBTRITON_JIT_BACKEND)
+  # dependencies: cuda toolkit
+  find_package(CUDAToolkit REQUIRED COMPONENTS cuda_driver)
+elseif(LIBTRITON_JIT_BACKEND STREQUAL "mthreads")
+  # dependencies: musa toolkit
+  find_package(MUSA REQUIRED)
+endif()
 # dependencies: python: we will use it for embeddeing the interpreter
 find_package(Python REQUIRED COMPONENTS Interpreter Development)
 message(STATUS "Python site-packages path: ${Python_SITELIB}")

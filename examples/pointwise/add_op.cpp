@@ -1,7 +1,7 @@
 
 
 #include "add_op.h"
-#include "c10/cuda/CUDAStream.h"
+#include "torch_musa/csrc/core/MUSAStream.h"
 #include "triton_jit/triton_jit_function.h"
 
 namespace my_ops {
@@ -27,11 +27,11 @@ at::Tensor add_tensor(const at::Tensor &a_, const at::Tensor &b_) {
   int64_t n = out.numel();
   const unsigned int num_blocks = (n + tile_size - 1) / tile_size;
 
-  // getCurrentCUDAStream ensures that the stream is initialized, a default stream for each device
-  c10::cuda::CUDAStream stream = c10::cuda::getCurrentCUDAStream();
+  // getCurrentMUSAStream ensures that the stream is initialized, a default stream for each device
+  c10::musa::MUSAStream stream = c10::musa::getCurrentMUSAStream();
   c10::DeviceGuard guard(out.device());
-  CUstream raw_stream = static_cast<CUstream>(stream.stream());
-  f(stream, num_blocks, 1, 1, num_warps, num_stages, a, b, out, n, tile_size);
+  MUstream raw_stream = static_cast<MUstream>(stream.stream());
+  f(raw_stream, num_blocks, 1, 1, num_warps, num_stages, a, b, out, n, tile_size);
   return out;
 }
 
@@ -39,7 +39,8 @@ TORCH_LIBRARY(my_ops, m) {
   m.def("add_tensor(Tensor self, Tensor other) -> Tensor");
 }
 
-TORCH_LIBRARY_IMPL(my_ops, CUDA, m) {
+// TORCH_LIBRARY_IMPL(my_ops, CUDA, m) {
+TORCH_LIBRARY_IMPL(my_ops, PrivateUse1, m) {
   m.impl("add_tensor", TORCH_FN(add_tensor));
 }
 }  // namespace my_ops

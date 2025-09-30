@@ -7,7 +7,11 @@
 #include <string>
 
 #include "c10/util/Logging.h"  // use torch's logging
+#ifdef __NVIDIA__
 #include "cuda.h"
+#elif defined(__MTHREADS__)
+#include "musa.h"
+#endif
 #include "torch/torch.h"
 
 namespace triton_jit {
@@ -28,12 +32,15 @@ constexpr const char *to_triton_typename(c10::ScalarType t) {
       return "i64";
     case c10::ScalarType::Short:
       return "i16";
+    // Mthreads: We use torch2.2.0 in dev env which does not support uint types.
+    #ifdef __NVIDIA__
     case c10::ScalarType::UInt32:
       return "u32";
     case c10::ScalarType::UInt64:
       return "u64";
     case c10::ScalarType::UInt16:
       return "u16";
+    #endif
     case c10::ScalarType::Char:
       return "i8";
     case c10::ScalarType::Byte:
@@ -111,6 +118,7 @@ struct triton_type : triton_type_helper<std::remove_cv_t<std::remove_reference_t
 std::filesystem::path get_script_dir();
 const char *get_gen_static_sig_script();
 const char *get_standalone_compile_script();
+#ifdef __NVIDIA__
 void ensure_cuda_context();
 
 #define checkCudaErrors(err) __checkCudaErrors(err, __FILE__, __LINE__)
@@ -129,5 +137,25 @@ inline void __checkCudaErrors(CUresult code, const char *file, const int line) {
     throw std::runtime_error(error_string);
   }
 }
+#elif defined(__MTHREADS__)
+void ensure_musa_context();
+
+#define checkMusaErrors(err) __checkMusaErrors(err, __FILE__, __LINE__)
+
+// Error handling function using exceptions instead of exit()
+inline void __checkMusaErrors(MUresult code, const char *file, const int line) {
+  if (code != MUSA_SUCCESS) {
+    const char *error_string;
+    muGetErrorString(code, &error_string);
+    fprintf(stderr,
+            "MUSA Driver API error = %04d from file <%s>, line %i. Detail: <%s>\n",
+            code,
+            file,
+            line,
+            error_string);
+    throw std::runtime_error(error_string);
+  }
+}
+#endif
 
 }  // namespace triton_jit

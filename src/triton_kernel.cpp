@@ -23,6 +23,7 @@ TritonKernel::TritonKernel(std::string_view dir, std::string_view kernel_name)
   // LOG(INFO) << fmt::format("TritonKernel Metadata loaded arch: {} shared: {}", this->arch_, this->shared_);
 }
 
+#ifdef __NVIDIA__
 void TritonKernel::lazy_init_handle() const {
   if (this->loaded_) {
     return;
@@ -104,4 +105,100 @@ void TritonKernel::launch(unsigned int grid_x,
                                  /*args*/ args,
                                  nullptr));
 }
+#elif defined(__MTHREADS__)
+void TritonKernel::lazy_init_handle() const {
+  if (this->loaded_) {
+    return;
+  }
+
+  LOG(INFO) << fmt::format("TritonKernel {} at {} loading itself!",
+                           this->kernel_name_,
+                           reinterpret_cast<const void*>(this));
+  // check cuda arch
+  MUdevice device_index;
+  checkMusaErrors(muCtxGetDevice(&device_index));
+  int major = 0, minor = 0;
+  checkMusaErrors(muDeviceGetAttribute(&major, MU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device_index));
+  checkMusaErrors(muDeviceGetAttribute(&minor, MU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device_index));
+  unsigned int arch = major * 10 + minor;
+  if (arch != this->arch_) {
+    throw std::runtime_error("compute architecture mismatch!");
+  }
+
+  // load module
+  std::string cubin_path = fmt::format("{}/{}.mubin", this->dir_, this->kernel_name_);
+  LOG(INFO) << fmt::format("Loading mubin {} into device {}", cubin_path, device_index);
+  checkMusaErrors(muModuleLoad(&this->mod_, cubin_path.c_str()));
+
+  // get function
+  checkMusaErrors(muModuleGetFunction(&this->fn_, this->mod_, this->kernel_name_.c_str()));
+
+  // // check required shared memory does not exceeds max shared memory per block
+  // int shared_optin;
+  // muDeviceGetAttribute(&shared_optin, MU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device_index);
+  // if (this->shared_ > shared_optin) {
+  //   throw std::runtime_error(
+  //       fmt::format("Out0fResources: Requested shared memory ({}) bytes exceeds GPU's maximum ({}) bytes.",
+  //                   this->shared_,
+  //                   shared_optin));
+  // }
+
+  // // increase shared memory if required
+  // if (this->shared_ > 49152 && shared_optin > 49152) {
+  //   LOG(INFO) << fmt::format(
+  //       "Condition met: this->shared_ ={} && shared_optin = {}. Setting MU_FUNC_CACHE_PREFER_SHARED.",
+  //       this->shared_,
+  //       shared_optin);
+  //   checkMusaErrors(muFuncSetCacheConfig(this->fn_, MU_FUNC_CACHE_PREFER_SHARED));
+  //   int shared_total, shared_static;
+  //   checkMusaErrors(muDeviceGetAttribute(&shared_total,
+  //                                        MU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR,
+  //                                        device_index));
+  //   checkMusaErrors(muFuncGetAttribute(&shared_static, MU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, this->fn_));
+  //   LOG(INFO) << fmt::format("current shared memory total {}", shared_total);
+  //   LOG(INFO) << fmt::format("current shared memory static {}", shared_static);
+  //   checkMusaErrors(muFuncSetAttribute(this->fn_,
+  //                                      MU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+  //                                      shared_optin - shared_static));
+  //   LOG(INFO) << fmt::format("shared memory to add {}", shared_optin - shared_static);
+  // }
+
+  // Moore's architecture is different from NV. L1 and shared memory are not together and cannot be dynamically allocated.
+  int max_shared;
+  checkMusaErrors(muDeviceGetAttribute(
+      &max_shared, MU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
+      device_index));
+  if (this->shared_ > max_shared) {
+    throw std::runtime_error(
+        fmt::format("OutOfResources: Requested shared memory ({}) bytes exceeds GPU's maximum ({}) bytes.",
+                    this->shared_,
+                    max_shared));
+  }
+  this->loaded_ = true;
+}
+
+// consider using a variadic template
+void TritonKernel::launch(unsigned int grid_x,
+                          unsigned int grid_y,
+                          unsigned int grid_z,
+                          int num_warps,
+                          MUstream stream,
+                          void** args) const {
+  this->lazy_init_handle();
+
+  LOG(INFO) << "muLaunchKernel";
+  checkMusaErrors(muLaunchKernel(this->fn_,
+                                 /*grid*/ grid_x,
+                                 grid_y,
+                                 grid_z,
+                                //  /*block*/ 128 * num_warps, // warp_size = 128 for arch QY2
+                                 /*block*/ 32 * num_warps, // warp_size = 32 for arch PH
+                                 1,
+                                 1,
+                                 /*shared & stream*/ this->shared_,
+                                 /*stream*/ stream,
+                                 /*args*/ args,
+                                 nullptr));
+}
+#endif
 }  // namespace triton_jit

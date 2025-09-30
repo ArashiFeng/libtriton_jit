@@ -1,5 +1,5 @@
 #include <iostream>
-#include "c10/cuda/CUDAStream.h"
+#include "torch_musa/csrc/core/MUSAStream.h"
 #include "torch/torch.h"
 #include "triton_jit/triton_jit_function.h"
 
@@ -65,10 +65,10 @@ at::Tensor sum_dim(const at::Tensor &self,
   const int num_stages = 2;
   const unsigned int num_blocks = (non_reduction_size + tile_m - 1) / tile_m;
 
+  c10::musa::MUSAStream stream = c10::musa::getCurrentMUSAStream();
   c10::DeviceGuard guard(out.device());
-  c10::cuda::CUDAStream stream = c10::cuda::getCurrentCUDAStream();
-  CUstream raw_stream = static_cast<CUstream>(stream.stream());
-  f(stream,
+  MUstream raw_stream = static_cast<MUstream>(stream.stream());
+  f(raw_stream,
     num_blocks,
     1,
     1,
@@ -87,7 +87,8 @@ at::Tensor sum_dim(const at::Tensor &self,
 TORCH_LIBRARY(my_ops, m) {
   m.def("sum.dim_IntList(Tensor self, int[1]? dim, bool keepdim=False, *, ScalarType? dtype=None) -> Tensor");
 }
-TORCH_LIBRARY_IMPL(my_ops, CUDA, m) {
+// TORCH_LIBRARY_IMPL(my_ops, CUDA, m) {
+TORCH_LIBRARY_IMPL(my_ops, PrivateUse1, m) {
   m.impl("sum.dim_IntList", TORCH_FN(sum_dim));
 }
 }  // namespace my_ops

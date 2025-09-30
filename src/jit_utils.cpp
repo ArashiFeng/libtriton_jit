@@ -63,6 +63,7 @@ std::filesystem::path get_home_directory() {
   return home_dir;
 }
 
+#ifdef __NVIDIA__
 void ensure_cuda_context() {
   CUcontext pctx;
   checkCudaErrors(cuCtxGetCurrent(&pctx));
@@ -73,4 +74,16 @@ void ensure_cuda_context() {
     checkCudaErrors(cuCtxSetCurrent(pctx));
   }
 }
+#elif defined(__MTHREADS__)
+void ensure_musa_context() {
+  MUcontext pctx;
+  checkMusaErrors(muCtxGetCurrent(&pctx));
+  if (!pctx) {
+    MUdevice device_index;
+    checkMusaErrors(muDeviceGet(&device_index, /*ordinal*/ 0));
+    checkMusaErrors(muDevicePrimaryCtxRetain(&pctx, device_index));
+    checkMusaErrors(muCtxSetCurrent(pctx));
+  }
+}
+#endif
 }  // namespace triton_jit

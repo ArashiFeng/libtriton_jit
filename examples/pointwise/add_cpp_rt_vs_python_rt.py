@@ -3,6 +3,7 @@ import triton
 import torch_musa
 from triton import language as tl
 
+torch.ops.load_library("libadd_op.so")
 
 @triton.jit
 def binary_pointwise_kernel(X, Y, Out, n, BLOCK_N: tl.constexpr):
@@ -28,28 +29,22 @@ def binary_add_tensor(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
             x, y, out, n, BLOCK_N=BLOCK_N, num_warps=8, num_stages=1
         )
     return out
-
+    
 
 if __name__ == "__main__":
-    torch_op_my_ops_add_tensor = torch.library.custom_op(
-        "my_ops::add_tensor", binary_add_tensor, mutates_args=(), device_types="cuda"
-    )
-
-    N = 128 * 1024
-    x = torch.randn(N, device="cuda")
-    y = torch.randn(N, device="cuda")
-
-    result1 = torch.add(x, y)
+    x = torch.randn(128 * 1024, device="musa")
+    y = torch.randn(128 * 1024, device="musa")
+    result1 = torch.ops.my_ops.add_tensor(x, y)
     result2 = binary_add_tensor(x, y)
-    result3 = torch.ops.my_ops.add_tensor(x, y)
 
-    torch.cuda.synchronize()
-    for _ in range(10):
-        torch.add(x, y)
-    torch.cuda.synchronize()
+    # print(result1)
+    # print(result2)
+    # print(f"torch.allclose: {torch.allclose(result1, result2)}")
+
+    torch.musa.synchronize()
     for _ in range(10):
         binary_add_tensor(x, y)
-    torch.cuda.synchronize()
+    torch.musa.synchronize()
     for _ in range(10):
-        torch_op_my_ops_add_tensor(x, y)
-    torch.cuda.synchronize()
+        torch.ops.my_ops.add_tensor(x, y)
+    torch.musa.synchronize()
