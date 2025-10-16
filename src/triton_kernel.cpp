@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <iomanip>
 #include <string>
 
 #include "c10/util/Logging.h"
@@ -145,7 +146,8 @@ void TritonKernel::launch(unsigned int grid_x,
   unsigned int grid_z,
   int num_warps,
   aclrtStream stream,
-  void** args) const {
+  void** args,
+  size_t num_args) const {
   this->lazy_init_handle();
 
   // Calculate block count
@@ -169,7 +171,9 @@ void TritonKernel::launch(unsigned int grid_x,
     void* arg0 __attribute__((aligned(8)));
     void* arg1 __attribute__((aligned(8)));
     void* arg2 __attribute__((aligned(8)));
-    int64_t arg3 __attribute__((aligned(8)));
+    int64_t arg3 __attribute__((aligned(8)));  //M
+    int64_t arg4 __attribute__((aligned(8)));  //N
+    int64_t arg5 __attribute__((aligned(8)));  //K
     int32_t gridX __attribute__((aligned(4)));
     int32_t gridY __attribute__((aligned(4)));
     int32_t gridZ __attribute__((aligned(4)));
@@ -181,14 +185,34 @@ void TritonKernel::launch(unsigned int grid_x,
   kernel_args.workspace_addr = nullptr;
 
   if (args != nullptr) {
-    kernel_args.arg0 = *reinterpret_cast<void**>(args[0]);
-    kernel_args.arg1 = *reinterpret_cast<void**>(args[1]);
-    kernel_args.arg2 = *reinterpret_cast<void**>(args[2]);
-    kernel_args.arg3 = args[3] ? *reinterpret_cast<int64_t*>(args[3]) : 128;
+    kernel_args.arg0 = (num_args > 0) ? *reinterpret_cast<void**>(args[0]) : nullptr;
+    kernel_args.arg1 = (num_args > 1) ? *reinterpret_cast<void**>(args[1]) : nullptr;
+    kernel_args.arg2 = (num_args > 2) ? *reinterpret_cast<void**>(args[2]) : nullptr;
+    
+    if ((num_args > 3)) {
+      kernel_args.arg3 = *reinterpret_cast<int64_t*>(args[3]);
+    } else {
+        kernel_args.arg3 = 128; 
+    }
+    if ((num_args > 4)) {
+      kernel_args.arg4 = *reinterpret_cast<int64_t*>(args[4]);
+    } else {
+        kernel_args.arg4 = 128; 
+    }
+    if ((num_args > 5)) {
+      kernel_args.arg5 = *reinterpret_cast<int64_t*>(args[5]);
+    } else {
+        kernel_args.arg5 = 128; 
+    }
+    
   } else {
-    memset(&kernel_args.arg0, 0, sizeof(void*) * 3 + sizeof(int64_t));
+    std::cout << "[KERNEL DEBUG] args is nullptr!" << std::endl;
+    memset(&kernel_args.arg0, 0, sizeof(void*) * 3 + sizeof(int64_t) * 3);
     kernel_args.arg3 = 128;
+    kernel_args.arg4 = 128;
+    kernel_args.arg4 = 128;
   }
+  
 
   kernel_args.gridX = static_cast<int32_t>(grid_x);
   kernel_args.gridY = static_cast<int32_t>(grid_y);

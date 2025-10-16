@@ -282,7 +282,7 @@ void TritonJITFunction::operator()(aclrtStream stream,
     device_index = 0;
   }
   const TritonKernel &kernel = this->get_kernel(full_signature, num_warps, num_stages, device_index);
-  kernel.launch(grid_x, grid_y, grid_z, num_warps, stream, kernel_args.data());
+  kernel.launch(grid_x, grid_y, grid_z, num_warps, stream, kernel_args.data(), kernel_args.size());
   return;
 }
 static_assert(std::is_move_constructible_v<TritonJITFunction>);

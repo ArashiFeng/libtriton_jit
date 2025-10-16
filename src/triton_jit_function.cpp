@@ -115,6 +115,6 @@ void TritonJITFunction::launch_with_raw_args(aclrtStream stream,
   }
 
   const TritonKernel& kernel = this->get_kernel(full_signature, num_warps, num_stages, device_index);
-  kernel.launch(grid_x, grid_y, grid_z, num_warps, stream, args);
+  kernel.launch(grid_x, grid_y, grid_z, num_warps, stream, args, num_args);
 }
 }  // namespace triton_jit
