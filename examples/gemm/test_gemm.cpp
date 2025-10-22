@@ -10,6 +10,17 @@
 #include <torch_npu/torch_npu.h>
 #include "triton_jit/triton_jit_function.h"
 
+// Timing helper functions
+using time_point_t = std::chrono::high_resolution_clock::time_point;
+
+inline time_point_t now() {
+  return std::chrono::high_resolution_clock::now();
+}
+
+inline double elapsed_ms(time_point_t start, time_point_t end) {
+  return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
 int main() {
     std::cout << "=== Testing Triton GEMM Operation ===" << std::endl;
 
@@ -17,7 +28,7 @@ int main() {
     setenv("TORCH_DEVICE_BACKEND_AUTOLOAD", "0", 1);
 
     // Get device ID from environment variable or use default
-    int32_t deviceId = 0;  // 默认设备 0
+    int32_t deviceId = 1;  // 默认设备 0
     const char* deviceEnv = std::getenv("NPU_DEVICE_ID");
     if (deviceEnv != nullptr) {
         deviceId = std::atoi(deviceEnv);
@@ -67,13 +78,15 @@ int main() {
 
     std::cout << "A[0, 0:10]: ";
     for (int i = 0; i < 10; ++i) {
-        std::cout << static_cast<float>(a_ptr[i]) << " "<< std::endl;
+        std::cout << static_cast<float>(a_ptr[i]) << " ";
     }
-
+    std::cout << std::endl;
+    
     std::cout << "\nB[0, 0:10]: ";
     for (int i = 0; i < 10; ++i) {
-        std::cout << static_cast<float>(b_ptr[i]) << " "<< std::endl;
+        std::cout << static_cast<float>(b_ptr[i]) << " ";
     }
+    std::cout << std::endl;
 
     // Perform Triton matmul
     std::cout << "\n=== Performing Triton GEMM ===" << std::endl;

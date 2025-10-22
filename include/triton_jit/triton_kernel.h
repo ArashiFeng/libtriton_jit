@@ -36,7 +36,8 @@ class TritonKernel {
               unsigned int grid_z,
               int num_warps,
               aclrtStream stream,
-              void** args) const;
+              void** args,
+              size_t num_args) const;
   friend TritonJITFunction;
 
  private:

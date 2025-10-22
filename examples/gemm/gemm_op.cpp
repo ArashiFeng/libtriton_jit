@@ -44,8 +44,6 @@ at::Tensor matmul(const at::Tensor &a_, const at::Tensor &b_) {
     // Calculate 2D grid dimensions
     const unsigned int grid_m = M / BLOCK_SIZE_M;
     const unsigned int grid_n = N / BLOCK_SIZE_N;
-    std::cout << "[GEMM DEBUG] Grid dimensions: grid_m=" << grid_m 
-              << ", grid_n=" << grid_n << std::endl;
     
     // Get stream
     aclrtStream stream = nullptr;
@@ -66,7 +64,6 @@ at::Tensor matmul(const at::Tensor &a_, const at::Tensor &b_) {
 #if HAS_TORCH_NPU
     if (stream != nullptr) {
         aclrtSynchronizeStream(stream);
-        std::cout << "[GEMM DEBUG] Stream synchronized ✓" << std::endl;
     }
 #else
     std::cout << "[GEMM DEBUG] No stream to synchronize (CPU)" << std::endl;

@@ -7,8 +7,8 @@
 #include <string>
 
 #include "c10/util/Logging.h"  // use torch's logging
-#include "cuda.h"
 #include "torch/torch.h"
+#include "acl/acl.h"
 
 namespace triton_jit {
 
@@ -111,23 +111,19 @@ struct triton_type : triton_type_helper<std::remove_cv_t<std::remove_reference_t
 std::filesystem::path get_script_dir();
 const char *get_gen_static_sig_script();
 const char *get_standalone_compile_script();
-void ensure_cuda_context();
 
-#define checkCudaErrors(err) __checkCudaErrors(err, __FILE__, __LINE__)
-
-// Error handling function using exceptions instead of exit()
-inline void __checkCudaErrors(CUresult code, const char *file, const int line) {
-  if (code != CUDA_SUCCESS) {
-    const char *error_string;
-    cuGetErrorString(code, &error_string);
-    fprintf(stderr,
-            "CUDA Driver API error = %04d from file <%s>, line %i. Detail: <%s>\n",
-            code,
-            file,
-            line,
-            error_string);
-    throw std::runtime_error(error_string);
+inline void checkAclErrors(aclError code, const char* message = "") {
+  const char *file = __FILE__;
+  const int line = __LINE__;
+  if (code != ACL_ERROR_NONE) {
+      const char *error_string = aclGetRecentErrMsg();
+      if (!error_string) {
+          error_string = "Unknown AscendCL error";
+      }
+      fprintf(stderr,
+              "AscendCL API error = %04d from file <%s>, line %i. Detail: <%s>. Message: %s\n",
+              code, file, line, error_string, message);
+      throw std::runtime_error(std::string(message) + ": " + error_string);
   }
 }
-
 }  // namespace triton_jit
