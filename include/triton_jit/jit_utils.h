@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
 
 #include "c10/util/Logging.h"  // use torch's logging
@@ -128,6 +129,18 @@ inline void __checkCudaErrors(CUresult code, const char *file, const int line) {
             error_string);
     throw std::runtime_error(error_string);
   }
+}
+
+inline std::string join_sig(const c10::SmallVector<std::string> &signature) {
+  std::stringstream ss;
+  for (size_t i = 0; i < signature.size(); i++) {
+    if (i == 0) {
+      ss << signature[i];
+    } else {
+      ss << "," << signature[i];
+    }
+  }
+  return ss.str();
 }
 
 }  // namespace triton_jit

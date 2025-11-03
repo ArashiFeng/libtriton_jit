@@ -17,3 +17,6 @@ if __name__ == "__main__":
     for _ in range(10):
         torch.ops.my_ops.add_tensor(x, y)
     torch.cuda.synchronize()
+    for _ in range(10):
+        torch.ops.my_ops.add_tensor_manual_arg_handle(x, y)
+    torch.cuda.synchronize()
