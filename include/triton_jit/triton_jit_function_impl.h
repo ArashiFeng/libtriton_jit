@@ -1,14 +1,3 @@
-/**
- * @file triton_jit_function_impl.h
- * @brief Template implementation of TritonJITFunction with Backend Policy
- *
- * This file contains the template implementation of TritonJITFunctionImpl,
- * which is parameterized by a BackendPolicy.
- *
- * @version 2.0.0
- * @date 2025-11-03
- */
-
 #pragma once
 
 #include <cstdint>
@@ -27,26 +16,13 @@
 
 namespace triton_jit {
 
-/**
- * @brief Argument type classification
- *
- * Describes how a runtime argument is handled:
- * - NON_CONSTEXPR: Regular runtime argument
- * - SPECIALIZED: Specialized at compile-time for specific values
- * - CONSTEXPR: Compile-time constant (affects kernel specialization)
- */
 enum struct ArgType : int8_t {
     NON_CONSTEXPR = 0,
     SPECIALIZED = 1,
     CONSTEXPR = 2,
 };
 
-/**
- * @brief Static signature of a Triton JIT function
- *
- * Describes the argument handling strategy for a function,
- * determined by the @triton.jit decorator in Python.
- */
+
 struct StaticSignature {
     int num_args;
     std::vector<ArgType> arg_type;
@@ -56,14 +32,7 @@ struct StaticSignature {
     }
 };
 
-/**
- * @brief Argument handler for processing variadic arguments
- *
- * This struct processes arguments passed to the kernel, extracting:
- * - Data pointers (for tensors)
- * - Kernel arguments (for kernel launch)
- * - Signature strings (for kernel specialization)
- */
+
 struct ArgHandle {
     const StaticSignature& ssig;
     c10::SmallVector<void*>& data_pointers;
@@ -180,14 +149,7 @@ struct ArgHandle {
     }
 };
 
-/**
- * @brief Template TritonJITFunction class parameterized by Backend
- *
- * This class wraps a Triton JIT function for calling from C++.
- * It handles kernel compilation, caching, and launching.
- *
- * @tparam Backend Backend policy (must satisfy BackendPolicy concept)
- */
+
 template<BackendPolicy Backend>
 class TritonJITFunctionImpl {
 private:
@@ -202,15 +164,7 @@ private:
     static std::unordered_map<std::string, std::unique_ptr<TritonJITFunctionImpl<Backend>>> functions_;
 
 public:
-    /**
-     * @brief Get or create a TritonJITFunction instance
-     *
-     * Uses the singleton pattern to ensure only one instance per (path, name) pair.
-     *
-     * @param path Path to Python file containing the Triton function
-     * @param name Function name
-     * @return Reference to the TritonJITFunction instance
-     */
+    
     static TritonJITFunctionImpl& get_instance(std::string_view path, std::string_view name) {
         std::string key = std::string(path) + "::" + std::string(name);
 
@@ -232,22 +186,7 @@ public:
     TritonJITFunctionImpl(TritonJITFunctionImpl&&) = default;
     TritonJITFunctionImpl& operator=(TritonJITFunctionImpl&&) = default;
 
-    /**
-     * @brief Call operator - main entry point for kernel execution
-     *
-     * This function:
-     * 1. Processes arguments to extract data pointers and build signature
-     * 2. Ensures backend context is initialized
-     * 3. Gets or compiles the kernel for this signature
-     * 4. Launches the kernel
-     *
-     * @tparam Args Variadic argument types
-     * @param stream Backend-specific stream
-     * @param grid_x, grid_y, grid_z Grid dimensions
-     * @param num_warps Number of warps per block
-     * @param num_stages Number of pipeline stages
-     * @param args Kernel arguments (tensors, scalars, etc.)
-     */
+    
     template<typename... Args>
     void operator()(
         typename Backend::StreamType stream,
@@ -297,16 +236,6 @@ public:
                      stream, kernel_args.data());
     }
 
-    /**
-     * @brief Low-level API to launch kernel with raw arguments
-     *
-     * @param stream Backend stream
-     * @param grid_x, grid_y, grid_z Grid dimensions
-     * @param num_warps Number of warps
-     * @param num_stages Pipeline stages
-     * @param full_signature Kernel signature string
-     * @param args Raw argument pointers
-     */
     void launch_with_raw_args(
         typename Backend::StreamType stream,
         unsigned int grid_x,
@@ -327,25 +256,7 @@ public:
     }
 
 private:
-    /**
-     * @brief Private constructor
-     *
-     * Loads static signature from Python introspection.
-     */
     TritonJITFunctionImpl(std::string_view path, std::string_view name);
-
-    /**
-     * @brief Get or compile a kernel for given signature
-     *
-     * This method caches compiled kernels. If a kernel for this signature
-     * doesn't exist, it triggers compilation via the Python interpreter.
-     *
-     * @param signature Kernel signature string
-     * @param num_warps Number of warps
-     * @param num_stages Pipeline stages
-     * @param device_index Device index
-     * @return Reference to the TritonKernel
-     */
     const TritonKernelImpl<Backend>& get_kernel(
         std::string_view signature,
         int num_warps,

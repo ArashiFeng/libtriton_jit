@@ -1,15 +1,3 @@
-/**
- * @file cuda_backend.h
- * @brief CUDA Backend Policy implementation
- *
- * This file implements the Backend Policy for CUDA using the CUDA Driver API.
- * It provides kernel launching, context management, and module loading
- * functionalities specific to CUDA.
- *
- * @version 2.0.0
- * @date 2025-11-03
- */
-
 #pragma once
 
 #include <cuda.h>
@@ -27,66 +15,26 @@
 
 namespace triton_jit {
 
-/**
- * @brief Kernel metadata structure
- *
- * Stores metadata loaded from the kernel's JSON file,
- * including shared memory requirements and target architecture.
- */
+
 struct CudaKernelMetadata {
     unsigned int shared;  ///< Required shared memory in bytes
     unsigned int arch;    ///< Target CUDA architecture (e.g., 80 for sm_80)
 };
 
-/**
- * @brief CUDA Backend Policy
- *
- * Implements the BackendPolicy concept for CUDA devices.
- * Uses CUDA Driver API for low-level kernel management.
- *
- * Features:
- * - Lazy kernel loading with module caching
- * - Shared memory configuration
- * - Architecture compatibility checking
- * - Thread-safe module management
- */
-struct CudaBackend {
-    // ========== Type Definitions ==========
 
+struct CudaBackend {
     using StreamType = CUstream;
     using ContextType = CUcontext;
     using KernelHandle = CUfunction;
 
-    /**
-     * @brief Module handle with metadata
-     *
-     * Stores both the CUDA module and associated metadata for a kernel.
-     */
     struct ModuleData {
         CUmodule module;
         CudaKernelMetadata metadata;
     };
 
-    // ========== Static Members ==========
-
-    /// Cache for loaded modules (thread-safe)
     static inline std::unordered_map<std::string, ModuleData> module_cache_;
     static inline std::mutex cache_mutex_;
 
-    // ========== Core Backend Methods ==========
-
-    /**
-     * @brief Launch a CUDA kernel
-     *
-     * @param stream CUDA stream to launch on
-     * @param kernel Kernel function handle
-     * @param grid_x, grid_y, grid_z Grid dimensions
-     * @param block_x, block_y, block_z Block dimensions
-     * @param args Kernel arguments (array of pointers)
-     * @param shared_memory Shared memory size in bytes (optional)
-     *
-     * @throws std::runtime_error if kernel launch fails
-     */
     static void launch_kernel(
         CUstream stream,
         CUfunction kernel,
@@ -116,14 +64,6 @@ struct CudaBackend {
         }
     }
 
-    /**
-     * @brief Ensure CUDA context is properly initialized
-     *
-     * For PyTorch integration, the context is usually managed by PyTorch.
-     * This function verifies the context exists and is valid.
-     *
-     * @throws std::runtime_error if context initialization fails
-     */
     static void ensure_context() {
         // When using PyTorch, the CUDA context is typically already initialized
         // This function primarily serves as a validation step
@@ -141,12 +81,6 @@ struct CudaBackend {
         }
     }
 
-    /**
-     * @brief Get current CUDA device index
-     *
-     * @return Device index (0, 1, 2, ...)
-     * @throws std::runtime_error if device query fails
-     */
     static int get_device_index() {
         CUdevice device;
         CUresult result = cuCtxGetDevice(&device);
@@ -162,23 +96,6 @@ struct CudaBackend {
         return static_cast<int>(device);
     }
 
-    /**
-     * @brief Load a kernel from compiled binary
-     *
-     * This function:
-     * 1. Loads kernel metadata from JSON
-     * 2. Verifies architecture compatibility
-     * 3. Loads CUBIN module
-     * 4. Configures shared memory if needed
-     * 5. Returns kernel function handle
-     *
-     * Results are cached for subsequent calls.
-     *
-     * @param dir Directory containing kernel files (.cubin, .json)
-     * @param kernel_name Name of the kernel function
-     * @return Kernel function handle
-     * @throws std::runtime_error if loading fails or architecture mismatches
-     */
     static CUfunction load_kernel(
         const std::string& dir,
         const std::string& kernel_name
@@ -251,13 +168,6 @@ struct CudaBackend {
         return kernel;
     }
 
-    /**
-     * @brief Get shared memory size for a loaded kernel
-     *
-     * @param dir Directory containing kernel
-     * @param kernel_name Kernel name
-     * @return Shared memory size in bytes
-     */
     static unsigned int get_shared_memory(
         const std::string& dir,
         const std::string& kernel_name
@@ -282,19 +192,6 @@ struct CudaBackend {
     }
 
 private:
-    /**
-     * @brief Configure shared memory for a kernel
-     *
-     * Handles shared memory configuration including:
-     * - Validation against device limits
-     * - Cache configuration for large shared memory
-     * - Dynamic shared memory attribute setting
-     *
-     * @param kernel Kernel function handle
-     * @param device CUDA device
-     * @param required_shared Required shared memory in bytes
-     * @throws std::runtime_error if shared memory exceeds device limits
-     */
     static void configure_shared_memory(
         CUfunction kernel,
         CUdevice device,
@@ -350,8 +247,6 @@ private:
     }
 };
 
-// Compile-time verification that CudaBackend satisfies BackendPolicy concept
-static_assert(BackendPolicy<CudaBackend>,
-              "CudaBackend must satisfy BackendPolicy concept");
+static_assert(BackendPolicy<CudaBackend>, "CudaBackend must satisfy BackendPolicy concept");
 
 } // namespace triton_jit

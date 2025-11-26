@@ -1,14 +1,3 @@
-/**
- * @file triton_jit_function_impl.cpp
- * @brief Template specialization implementations for TritonJITFunctionImpl
- *
- * This file contains the non-template member function implementations
- * (constructor and get_kernel) for TritonJITFunctionImpl.
- *
- * @version 2.0.0
- * @date 2025-11-03
- */
-
 #include "triton_jit/triton_jit_function_impl.h"
 
 #include <algorithm>
@@ -24,9 +13,6 @@
 
 namespace triton_jit {
 
-/**
- * @brief Ensure Python interpreter is initialized
- */
 static void ensure_initialized() {
     // When using libtriton_jit with a python C-extension, it is already initialized
     c10::initLogging();
@@ -34,8 +20,6 @@ static void ensure_initialized() {
         Py_InitializeEx(false);
     }
 }
-
-// ========== TritonJITFunctionImpl Constructor ==========
 
 template<BackendPolicy Backend>
 TritonJITFunctionImpl<Backend>::TritonJITFunctionImpl(
@@ -70,8 +54,6 @@ TritonJITFunctionImpl<Backend>::TritonJITFunctionImpl(
     }
     this->static_sig_ = StaticSignature{num_args, arg_types};
 }
-
-// ========== TritonJITFunctionImpl::get_kernel ==========
 
 template<BackendPolicy Backend>
 const TritonKernelImpl<Backend>& TritonJITFunctionImpl<Backend>::get_kernel(
@@ -124,12 +106,5 @@ const TritonKernelImpl<Backend>& TritonJITFunctionImpl<Backend>::get_kernel(
 
 } // namespace triton_jit
 
-// ========== Explicit Template Instantiations ==========
-
-// Instantiate for CudaBackend
 #include "triton_jit/backends/cuda_backend.h"
 template class triton_jit::TritonJITFunctionImpl<triton_jit::CudaBackend>;
-
-// Future backends can be added here:
-// #include "triton_jit/backends/npu_backend.h"
-// template class triton_jit::TritonJITFunctionImpl<triton_jit::NpuBackend>;

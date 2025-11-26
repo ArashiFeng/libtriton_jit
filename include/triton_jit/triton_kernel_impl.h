@@ -1,14 +1,3 @@
-/**
- * @file triton_kernel_impl.h
- * @brief Template implementation of TritonKernel with Backend Policy
- *
- * This file contains the template implementation of TritonKernelImpl,
- * which is parameterized by a BackendPolicy.
- *
- * @version 2.0.0
- * @date 2025-11-03
- */
-
 #pragma once
 
 #include <mutex>
@@ -25,32 +14,15 @@ namespace triton_jit {
 template<BackendPolicy Backend>
 class TritonJITFunctionImpl;
 
-/**
- * @brief Template TritonKernel class parameterized by Backend
- *
- * This class manages a single Triton kernel with lazy loading.
- * The backend determines how kernels are loaded and launched.
- *
- * @tparam Backend Backend policy (must satisfy BackendPolicy concept)
- */
 template<BackendPolicy Backend>
 class TritonKernelImpl {
 private:
-    /// Directory containing kernel files (IRs, metadata, binary)
     std::string dir_;
-
-    /// Name of the kernel function
     std::string kernel_name_;
-
-    /// Whether the kernel has been loaded
     mutable bool loaded_ = false;
-
-    /// Backend-specific kernel handle
     mutable typename Backend::KernelHandle kernel_handle_;
 
 public:
-    // ========== Constructors ==========
-
     TritonKernelImpl() = default;
 
     TritonKernelImpl(std::string_view dir, std::string_view kernel_name)
@@ -68,21 +40,6 @@ public:
     TritonKernelImpl(TritonKernelImpl&&) = default;
     TritonKernelImpl& operator=(TritonKernelImpl&&) = default;
 
-    // ========== Public Methods ==========
-
-    /**
-     * @brief Launch the kernel
-     *
-     * This method lazily loads the kernel on first launch, then invokes
-     * the backend's launch_kernel method.
-     *
-     * @param grid_x, grid_y, grid_z Grid dimensions
-     * @param num_warps Number of warps per block
-     * @param stream Backend-specific stream
-     * @param args Kernel arguments (array of pointers)
-     *
-     * @note The block dimensions are calculated as (num_warps * 32, 1, 1)
-     */
     void launch(
         unsigned int grid_x,
         unsigned int grid_y,
@@ -113,36 +70,19 @@ public:
         );
     }
 
-    /**
-     * @brief Get kernel directory
-     */
     const std::string& get_dir() const {
         return dir_;
     }
 
-    /**
-     * @brief Get kernel name
-     */
     const std::string& get_kernel_name() const {
         return kernel_name_;
     }
 
-    /**
-     * @brief Check if kernel is loaded
-     */
     bool is_loaded() const {
         return loaded_;
     }
 
 private:
-    /**
-     * @brief Lazy load kernel handle
-     *
-     * This method is called on the first launch() invocation.
-     * It delegates to the backend's load_kernel() method.
-     *
-     * Thread-safe: multiple threads can call this safely.
-     */
     void lazy_init_handle() const {
         if (loaded_) {
             return;
