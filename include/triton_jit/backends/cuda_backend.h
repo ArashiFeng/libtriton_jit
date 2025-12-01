@@ -17,8 +17,8 @@ namespace triton_jit {
 
 
 struct CudaKernelMetadata {
-    unsigned int shared;  ///< Required shared memory in bytes
-    unsigned int arch;    ///< Target CUDA architecture (e.g., 80 for sm_80)
+    unsigned int shared;
+    unsigned int arch;
 };
 
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -16,13 +17,92 @@
 
 namespace triton_jit {
 
+/**
+ * @brief Get the next multiple of a step value
+ *
+ * Used for alignment calculations in ParameterBuffer.
+ */
+template <typename T>
+T get_next_multiple_of(T pos, T step) {
+    return ((pos + step - 1) / step) * step;
+}
+
+/**
+ * @brief Join signature strings with comma separator
+ */
+inline std::string join_sig(const c10::SmallVector<std::string>& signature) {
+    std::stringstream ss;
+    for (size_t i = 0; i < signature.size(); i++) {
+        if (i == 0) {
+            ss << signature[i];
+        } else {
+            ss << "," << signature[i];
+        }
+    }
+    return ss.str();
+}
+
+/**
+ * @brief Buffer for storing kernel parameters with proper alignment
+ *
+ * This class manages a contiguous buffer of kernel arguments, handling
+ * proper alignment for each argument type. It stores the actual data
+ * and provides pointers for kernel launch.
+ */
+struct ParameterBuffer {
+    c10::SmallVector<std::byte> buff_;
+    size_t cursor_ = 0;
+    c10::SmallVector<size_t> offsets_;
+
+    void reserve(size_t new_cap) {
+        const int ESTIMATED_BYTES_PER_ARG = 4;
+        this->buff_.reserve(new_cap * ESTIMATED_BYTES_PER_ARG);
+        this->offsets_.reserve(new_cap);
+    }
+
+    template <typename T>
+    void push_arg(T&& v) {
+        using U = std::decay_t<T>;
+        static_assert(std::is_trivially_copyable_v<U>, "Non trivially copyable type");
+        size_t align = alignof(U);
+        size_t offset = get_next_multiple_of(this->cursor_, align);
+        this->offsets_.push_back(offset);
+
+        size_t size = sizeof(U);
+        this->buff_.resize(offset + size);
+        std::byte* ptr = this->buff_.data() + offset;
+        std::memcpy(ptr, &v, size);
+
+        this->cursor_ = offset + size;
+    }
+
+    c10::SmallVector<void*> get_ptrs() {
+        c10::SmallVector<void*> ptrs;
+        ptrs.reserve(this->offsets_.size());
+        std::byte* start = this->buff_.data();
+        for (const size_t off : this->offsets_) {
+            ptrs.push_back(start + off);
+        }
+        return ptrs;
+    }
+
+    size_t size() const {
+        return this->offsets_.size();
+    }
+};
+
+/**
+ * @brief Argument type classification
+ */
 enum struct ArgType : int8_t {
     NON_CONSTEXPR = 0,
     SPECIALIZED = 1,
     CONSTEXPR = 2,
 };
 
-
+/**
+ * @brief Static signature of a Triton JIT function
+ */
 struct StaticSignature {
     int num_args;
     std::vector<ArgType> arg_type;
@@ -33,13 +113,30 @@ struct StaticSignature {
 };
 
 
+/**
+ * @brief Argument handler for processing variadic arguments
+ *
+ * This struct processes arguments passed to the kernel, extracting:
+ * - Data pointers (for tensors) stored in ParameterBuffer
+ * - Signature strings (for kernel specialization)
+ *
+ * Uses ParameterBuffer for proper alignment of kernel arguments,
+ * consistent with the master implementation.
+ */
 struct ArgHandle {
     const StaticSignature& ssig;
-    c10::SmallVector<void*>& data_pointers;
-    c10::SmallVector<void*>& kernel_args;
+    /* data pointer of Tensors;
+    It is not that straight to extract data pointer from a tensor, since it is encapsulated
+    by Storage. We gather data pointers here for them to live out of the loop while iterating
+    over arguments.*/
+    ParameterBuffer& buf;
     c10::SmallVector<std::string>& signature;
     int idx;
 
+    /***
+     * Iterate over the args and populate data_pointers, kernel_args and signature according to
+     * to rules of Triton's jit runtime.
+     */
     template<typename... Args>
     void handle_args(Args... args) {
         (handle_arg(args), ...);
@@ -88,13 +185,15 @@ struct ArgHandle {
         if constexpr (is_same_ignore_cvref<at::Tensor, T>::value) {
             handle_tensor(item);
         } else if constexpr (is_same_ignore_cvref<std::nullopt_t, T>::value) {
+            // Assumption: nullopt is always treated as constexpr,
+            // even if the parameter is not marked as constexpr
             signature.push_back("nullopt");
         } else {
-            if (ssig.at(idx) == ArgType::CONSTEXPR) {
+            if (ssig.at(idx) == ArgType::CONSTEXPR) {  // constexpr
                 handle_constexpr(item);
-            } else if (ssig.at(idx) == ArgType::SPECIALIZED) {
+            } else if (ssig.at(idx) == ArgType::SPECIALIZED) {  // specialized
                 handle_specialized(item);
-            } else {
+            } else {  // ArgType::NON_CONSTEXPR
                 handle_non_constexpr(item);
             }
         }
@@ -102,15 +201,15 @@ struct ArgHandle {
     }
 
     void handle_tensor(const at::Tensor& item) {
+        // Assumption: Tensor is never constexpr
         TORCH_CHECK(this->ssig.at(idx) != ArgType::CONSTEXPR);
         void* p_item = item.data_ptr();
-        data_pointers.push_back(p_item);
-        kernel_args.push_back(&(data_pointers.back()));
+        this->buf.push_arg(p_item);
         const char* dtype = to_triton_typename(item.scalar_type());
 
         const char* specialization = "";
         if (ssig.at(idx) == ArgType::SPECIALIZED) {
-            specialization = spec(reinterpret_cast<std::uintptr_t>(data_pointers.back()));
+            specialization = spec(reinterpret_cast<std::uintptr_t>(p_item));
         }
         std::string sig_for_idx = fmt::format("*{}{}", dtype, specialization);
         signature.push_back(sig_for_idx);
@@ -127,14 +226,12 @@ struct ArgHandle {
         if constexpr (std::is_integral_v<std::remove_cv_t<std::remove_reference_t<decltype(item)>>>) {
             const char* specialization = spec(item);
             if (specialization != ":1") {
-                const void* p_item = &item;
-                kernel_args.push_back(const_cast<void*>(p_item));
+                this->buf.push_arg(item);
             }
             std::string sig_for_idx = fmt::format("{}{}", dtype, specialization);
             signature.push_back(sig_for_idx);
         } else {
-            const void* p_item = &item;
-            kernel_args.push_back(const_cast<void*>(p_item));
+            this->buf.push_arg(item);
             std::string sig_for_idx = fmt::format("{}", dtype);
             signature.push_back(sig_for_idx);
         }
@@ -142,10 +239,14 @@ struct ArgHandle {
 
     template<typename T>
     void handle_non_constexpr(const T& item) {
-        const void* p_item = &item;
-        kernel_args.push_back(const_cast<void*>(p_item));
+        this->buf.push_arg(item);
         const char* dtype = triton_type<decltype(item)>::name;
         signature.push_back(dtype);
+    }
+
+    void append_global_scratch() {
+        void* global_scratch = nullptr;
+        this->buf.push_arg(global_scratch);
     }
 };
 
@@ -186,7 +287,24 @@ public:
     TritonJITFunctionImpl(TritonJITFunctionImpl&&) = default;
     TritonJITFunctionImpl& operator=(TritonJITFunctionImpl&&) = default;
 
-    
+    /**
+     * @brief Get the static signature of this function
+     *
+     * @return Reference to the StaticSignature
+     */
+    const StaticSignature& get_static_sig() const {
+        return this->static_sig_;
+    }
+
+    /**
+     * @brief Call operator - main entry point for kernel execution
+     *
+     * This function:
+     * 1. Processes arguments to extract data pointers and build signature
+     * 2. Ensures backend context is initialized
+     * 3. Gets or compiles the kernel for this signature
+     * 4. Launches the kernel
+     */
     template<typename... Args>
     void operator()(
         typename Backend::StreamType stream,
@@ -199,29 +317,19 @@ public:
     ) const {
         const int num_args = this->static_sig_.num_args;
 
-        // Storage for argument processing
-        c10::SmallVector<void*> data_pointers;
-        data_pointers.reserve(num_args);
-        c10::SmallVector<void*> kernel_args;
-        kernel_args.reserve(num_args);
+        // Storage for argument processing using ParameterBuffer
+        ParameterBuffer buffer;
+        buffer.reserve(num_args);  // this is a coarse estimation of parameter size
         c10::SmallVector<std::string> signature;
         signature.reserve(num_args);
 
         // Process arguments
-        ArgHandle handler = {this->static_sig_, data_pointers, kernel_args, signature, 0};
+        ArgHandle handler = {this->static_sig_, buffer, signature, 0};
         (handler.handle_arg(args), ...);
 
-        // Add global scratch (Triton 3.3+)
-        void* global_scratch = nullptr;
-        data_pointers.push_back(global_scratch);
-        kernel_args.push_back(&(data_pointers.back()));
-
-        // Build full signature string
-        std::string full_signature;
-        for (size_t i = 0; i < signature.size(); i++) {
-            if (i > 0) full_signature += ",";
-            full_signature += signature[i];
-        }
+        // global scratch: introduced in triton 3.3
+        handler.append_global_scratch();
+        std::string full_signature = join_sig(signature);
 
         // Backend-specific context setup
         Backend::ensure_context();
@@ -232,8 +340,8 @@ public:
             this->get_kernel(full_signature, num_warps, num_stages, device_index);
 
         // Launch kernel
-        kernel.launch(grid_x, grid_y, grid_z, num_warps,
-                     stream, kernel_args.data());
+        c10::SmallVector<void*> ptrs = buffer.get_ptrs();
+        kernel.launch(grid_x, grid_y, grid_z, num_warps, stream, ptrs.data());
     }
 
     void launch_with_raw_args(

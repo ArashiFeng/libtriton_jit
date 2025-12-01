@@ -5,12 +5,23 @@
 
 namespace triton_jit {
 
-// Re-export ArgType and StaticSignature for user code
-using ArgType = ArgType;
-using StaticSignature = StaticSignature;
+// ============================================================
+// Types exported via backend_config.h and triton_jit_function_impl.h:
+// - TritonJITFunction (type alias)
+// - TritonKernel (type alias)
+// - ArgType (enum)
+// - StaticSignature (struct)
+// - ParameterBuffer (struct)
+// - ArgHandle (struct)
+// - join_sig() (function)
+// - get_next_multiple_of() (function template)
+// ============================================================
 
-// For backward compatibility, ensure TritonJITFunction is move constructible
+// Compile-time checks
 static_assert(std::is_move_constructible_v<TritonJITFunction>,
               "TritonJITFunction must be move constructible");
+
+static_assert(std::is_move_constructible_v<TritonKernel>,
+              "TritonKernel must be move constructible");
 
 } // namespace triton_jit

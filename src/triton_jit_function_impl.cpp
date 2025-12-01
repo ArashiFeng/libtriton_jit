@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -14,11 +15,15 @@
 namespace triton_jit {
 
 static void ensure_initialized() {
-    // When using libtriton_jit with a python C-extension, it is already initialized
-    c10::initLogging();
-    if (!Py_IsInitialized()) {
-        Py_InitializeEx(false);
-    }
+    // Use std::call_once to ensure initialization happens only once
+    static std::once_flag init_flag;
+    std::call_once(init_flag, [](){
+        // When using libtriton_jit with a python C-extension, it is already initialized
+        c10::initLogging();
+        if (!Py_IsInitialized()) {
+            Py_InitializeEx(false);
+        }
+    });
 }
 
 template<BackendPolicy Backend>
