@@ -12,6 +12,9 @@ concept BackendPolicy = requires {
     typename T::ContextType;
     typename T::KernelHandle;
 
+    // Each backend must define its warp size (CUDA: 32, IX: 64)
+    { T::WARP_SIZE } -> std::convertible_to<unsigned int>;
+
 } && requires(
     typename T::StreamType stream,
     typename T::KernelHandle kernel,

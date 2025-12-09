@@ -1,6 +1,10 @@
 #pragma once
 
-#include "triton_jit/backends/cuda_backend.h"
+#if defined(BACKEND_IX)
+    #include "triton_jit/backends/ix_backend.h"
+#else
+    #include "triton_jit/backends/cuda_backend.h"
+#endif
 
 namespace triton_jit {
 
@@ -15,6 +19,10 @@ class TritonJITFunctionImpl;
 #if defined(BACKEND_CUDA)
     /// Default backend for CUDA
     using DefaultBackend = CudaBackend;
+
+#elif defined(BACKEND_IX)
+    /// Default backend for IX (Tianshu)
+    using DefaultBackend = IxBackend;
 
 #elif defined(BACKEND_NPU)
     /// Default backend for NPU (Ascend)

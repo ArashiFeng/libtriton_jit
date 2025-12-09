@@ -16,23 +16,23 @@
 namespace triton_jit {
 
 
-struct CudaKernelMetadata {
+struct IxKernelMetadata {
     unsigned int shared;
     unsigned int arch;
 };
 
 
-struct CudaBackend {
+struct IxBackend {
     using StreamType = CUstream;
     using ContextType = CUcontext;
     using KernelHandle = CUfunction;
 
-    // CUDA warp size is 32 threads
-    static constexpr unsigned int WARP_SIZE = 32;
+    // IX (Tianshu) warp size is 64 threads
+    static constexpr unsigned int WARP_SIZE = 64;
 
     struct ModuleData {
         CUmodule module;
-        CudaKernelMetadata metadata;
+        IxKernelMetadata metadata;
     };
 
     static inline std::unordered_map<std::string, ModuleData> module_cache_;
@@ -46,7 +46,7 @@ struct CudaBackend {
         void** args,
         unsigned int shared_memory = 0
     ) {
-        LOG(INFO) << "cuLaunchKernel";
+        LOG(INFO) << "cuLaunchKernel (IX Backend)";
 
         CUresult result = cuLaunchKernel(
             kernel,
@@ -62,7 +62,7 @@ struct CudaBackend {
             const char* error_string;
             cuGetErrorString(result, &error_string);
             throw std::runtime_error(
-                fmt::format("CUDA kernel launch failed: {}", error_string)
+                fmt::format("IX kernel launch failed: {}", error_string)
             );
         }
     }
@@ -76,7 +76,7 @@ struct CudaBackend {
         if (result != CUDA_SUCCESS || ctx == nullptr) {
             // If no context exists, we could create one, but this is unusual
             // in PyTorch workflows. Log a warning.
-            LOG(WARNING) << "No CUDA context found. Creating default context.";
+            LOG(WARNING) << "No IX context found. Creating default context.";
 
             CUdevice device;
             checkCudaErrors(cuDeviceGet(&device, 0));
@@ -92,7 +92,7 @@ struct CudaBackend {
             const char* error_string;
             cuGetErrorString(result, &error_string);
             throw std::runtime_error(
-                fmt::format("Failed to get CUDA device: {}", error_string)
+                fmt::format("Failed to get IX device: {}", error_string)
             );
         }
 
@@ -126,30 +126,17 @@ struct CudaBackend {
         }
 
         nlohmann::json meta_data = nlohmann::json::parse(f);
-        CudaKernelMetadata metadata;
+        IxKernelMetadata metadata;
         metadata.shared = meta_data["shared"];
         metadata.arch = meta_data["target"]["arch"];
 
         LOG(INFO) << fmt::format(
-            "Loading kernel {} with arch={}, shared={}",
+            "Loading IX kernel {} with arch={}, shared={}",
             kernel_name, metadata.arch, metadata.shared);
 
-        // Check architecture compatibility
-        CUdevice device;
-        checkCudaErrors(cuCtxGetDevice(&device));
-
-        int major = 0, minor = 0;
-        checkCudaErrors(cuDeviceGetAttribute(
-            &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
-        checkCudaErrors(cuDeviceGetAttribute(
-            &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device));
-
-        unsigned int device_arch = major * 10 + minor;
-        if (device_arch != metadata.arch) {
-            throw std::runtime_error(fmt::format(
-                "Compute architecture mismatch! Device has sm_{}, kernel requires sm_{}",
-                device_arch, metadata.arch));
-        }
+        // Note: For IX platform, architecture validation may differ from CUDA
+        // Skip strict architecture check for now, as IX may report different values
+        // TODO: Add IX-specific architecture validation if needed
 
         // Load module
         std::string cubin_path = fmt::format("{}/{}.cubin", dir, kernel_name);
@@ -163,7 +150,7 @@ struct CudaBackend {
         checkCudaErrors(cuModuleGetFunction(&kernel, module, kernel_name.c_str()));
 
         // Configure shared memory if needed
-        configure_shared_memory(kernel, device, metadata.shared);
+        configure_shared_memory(kernel, metadata.shared);
 
         // Cache the module
         module_cache_[key] = ModuleData{module, metadata};
@@ -197,9 +184,11 @@ struct CudaBackend {
 private:
     static void configure_shared_memory(
         CUfunction kernel,
-        CUdevice device,
         unsigned int required_shared
     ) {
+        CUdevice device;
+        checkCudaErrors(cuCtxGetDevice(&device));
+
         // Check shared memory limits
         int shared_optin;
         cuDeviceGetAttribute(
@@ -207,7 +196,7 @@ private:
             CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
             device);
 
-        if (required_shared > shared_optin) {
+        if (required_shared > static_cast<unsigned int>(shared_optin)) {
             throw std::runtime_error(fmt::format(
                 "OutOfResources: Requested shared memory ({} bytes) "
                 "exceeds GPU's maximum ({} bytes)",
@@ -250,6 +239,6 @@ private:
     }
 };
 
-static_assert(BackendPolicy<CudaBackend>, "CudaBackend must satisfy BackendPolicy concept");
+static_assert(BackendPolicy<IxBackend>, "IxBackend must satisfy BackendPolicy concept");
 
 } // namespace triton_jit

@@ -111,5 +111,12 @@ const TritonKernelImpl<Backend>& TritonJITFunctionImpl<Backend>::get_kernel(
 
 } // namespace triton_jit
 
+#ifdef BACKEND_CUDA
 #include "triton_jit/backends/cuda_backend.h"
 template class triton_jit::TritonJITFunctionImpl<triton_jit::CudaBackend>;
+#endif
+
+#ifdef BACKEND_IX
+#include "triton_jit/backends/ix_backend.h"
+template class triton_jit::TritonJITFunctionImpl<triton_jit::IxBackend>;
+#endif

@@ -51,8 +51,8 @@ public:
         // Lazy initialization
         lazy_init_handle();
 
-        // Calculate block dimensions
-        unsigned int block_x = num_warps * 32;  // Each warp has 32 threads
+        // Calculate block dimensions using backend-specific warp size
+        unsigned int block_x = num_warps * Backend::WARP_SIZE;
         unsigned int block_y = 1;
         unsigned int block_z = 1;
 

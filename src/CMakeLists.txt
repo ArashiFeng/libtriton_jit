@@ -14,6 +14,9 @@ target_link_libraries(triton_jit
   PUBLIC Torch::Torch CUDA::cuda_driver fmt::fmt-header-only
   PRIVATE pybind11::embed)
 
+# Set backend compile definition based on BACKEND variable
+target_compile_definitions(triton_jit PUBLIC BACKEND_${BACKEND})
+
 # Get nlohmann_json include directory for public headers (header-only library)
 get_target_property(JSON_INCLUDE_DIR nlohmann_json::nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
 target_include_directories(triton_jit
