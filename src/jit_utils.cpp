@@ -63,6 +63,7 @@ std::filesystem::path get_home_directory() {
   return home_dir;
 }
 
+#ifndef BACKEND_NPU
 void ensure_cuda_context() {
   CUcontext pctx;
   checkCudaErrors(cuCtxGetCurrent(&pctx));
@@ -73,4 +74,5 @@ void ensure_cuda_context() {
     checkCudaErrors(cuCtxSetCurrent(pctx));
   }
 }
+#endif
 }  // namespace triton_jit

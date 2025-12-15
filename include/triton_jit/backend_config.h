@@ -1,6 +1,8 @@
 #pragma once
 
-#if defined(BACKEND_IX)
+#if defined(BACKEND_NPU)
+    #include "triton_jit/backends/npu_backend.h"
+#elif defined(BACKEND_IX)
     #include "triton_jit/backends/ix_backend.h"
 #else
     #include "triton_jit/backends/cuda_backend.h"
@@ -16,19 +18,17 @@ template<BackendPolicy Backend>
 class TritonJITFunctionImpl;
 
 
-#if defined(BACKEND_CUDA)
+#if defined(BACKEND_NPU)
+    /// Default backend for NPU (Ascend)
+    using DefaultBackend = NpuBackend;
+
+#elif defined(BACKEND_CUDA)
     /// Default backend for CUDA
     using DefaultBackend = CudaBackend;
 
 #elif defined(BACKEND_IX)
     /// Default backend for IX (Tianshu)
     using DefaultBackend = IxBackend;
-
-#elif defined(BACKEND_NPU)
-    /// Default backend for NPU (Ascend)
-    // Future implementation
-    using DefaultBackend = NpuBackend;
-    #error "NPU Backend not yet implemented. Use BACKEND_CUDA for now."
 
 #else
     // Default to CUDA if no backend specified

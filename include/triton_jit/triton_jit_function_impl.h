@@ -17,19 +17,11 @@
 
 namespace triton_jit {
 
-/**
- * @brief Get the next multiple of a step value
- *
- * Used for alignment calculations in ParameterBuffer.
- */
 template <typename T>
 T get_next_multiple_of(T pos, T step) {
     return ((pos + step - 1) / step) * step;
 }
 
-/**
- * @brief Join signature strings with comma separator
- */
 inline std::string join_sig(const c10::SmallVector<std::string>& signature) {
     std::stringstream ss;
     for (size_t i = 0; i < signature.size(); i++) {
@@ -42,13 +34,6 @@ inline std::string join_sig(const c10::SmallVector<std::string>& signature) {
     return ss.str();
 }
 
-/**
- * @brief Buffer for storing kernel parameters with proper alignment
- *
- * This class manages a contiguous buffer of kernel arguments, handling
- * proper alignment for each argument type. It stores the actual data
- * and provides pointers for kernel launch.
- */
 struct ParameterBuffer {
     c10::SmallVector<std::byte> buff_;
     size_t cursor_ = 0;
@@ -91,18 +76,12 @@ struct ParameterBuffer {
     }
 };
 
-/**
- * @brief Argument type classification
- */
 enum struct ArgType : int8_t {
     NON_CONSTEXPR = 0,
     SPECIALIZED = 1,
     CONSTEXPR = 2,
 };
 
-/**
- * @brief Static signature of a Triton JIT function
- */
 struct StaticSignature {
     int num_args;
     std::vector<ArgType> arg_type;
@@ -113,16 +92,6 @@ struct StaticSignature {
 };
 
 
-/**
- * @brief Argument handler for processing variadic arguments
- *
- * This struct processes arguments passed to the kernel, extracting:
- * - Data pointers (for tensors) stored in ParameterBuffer
- * - Signature strings (for kernel specialization)
- *
- * Uses ParameterBuffer for proper alignment of kernel arguments,
- * consistent with the master implementation.
- */
 struct ArgHandle {
     const StaticSignature& ssig;
     /* data pointer of Tensors;
@@ -133,10 +102,6 @@ struct ArgHandle {
     c10::SmallVector<std::string>& signature;
     int idx;
 
-    /***
-     * Iterate over the args and populate data_pointers, kernel_args and signature according to
-     * to rules of Triton's jit runtime.
-     */
     template<typename... Args>
     void handle_args(Args... args) {
         (handle_arg(args), ...);
@@ -287,24 +252,10 @@ public:
     TritonJITFunctionImpl(TritonJITFunctionImpl&&) = default;
     TritonJITFunctionImpl& operator=(TritonJITFunctionImpl&&) = default;
 
-    /**
-     * @brief Get the static signature of this function
-     *
-     * @return Reference to the StaticSignature
-     */
     const StaticSignature& get_static_sig() const {
         return this->static_sig_;
     }
 
-    /**
-     * @brief Call operator - main entry point for kernel execution
-     *
-     * This function:
-     * 1. Processes arguments to extract data pointers and build signature
-     * 2. Ensures backend context is initialized
-     * 3. Gets or compiles the kernel for this signature
-     * 4. Launches the kernel
-     */
     template<typename... Args>
     void operator()(
         typename Backend::StreamType stream,

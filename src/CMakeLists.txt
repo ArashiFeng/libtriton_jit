@@ -10,9 +10,17 @@ target_include_directories(triton_jit
   PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
-target_link_libraries(triton_jit
-  PUBLIC Torch::Torch CUDA::cuda_driver fmt::fmt-header-only
-  PRIVATE pybind11::embed)
+
+# Backend-specific link libraries
+if(BACKEND STREQUAL "NPU")
+    target_link_libraries(triton_jit
+      PUBLIC Torch::Torch Ascend::ascendcl Ascend::runtime fmt::fmt-header-only
+      PRIVATE pybind11::embed)
+else()
+    target_link_libraries(triton_jit
+      PUBLIC Torch::Torch CUDA::cuda_driver fmt::fmt-header-only
+      PRIVATE pybind11::embed)
+endif()
 
 # Set backend compile definition based on BACKEND variable
 target_compile_definitions(triton_jit PUBLIC BACKEND_${BACKEND})

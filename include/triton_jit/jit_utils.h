@@ -7,8 +7,13 @@
 #include <string>
 
 #include "c10/util/Logging.h"  // use torch's logging
-#include "cuda.h"
 #include "torch/torch.h"
+
+#ifdef BACKEND_NPU
+#include "acl/acl.h"
+#else
+#include "cuda.h"
+#endif
 
 namespace triton_jit {
 
@@ -111,6 +116,22 @@ struct triton_type : triton_type_helper<std::remove_cv_t<std::remove_reference_t
 std::filesystem::path get_script_dir();
 const char *get_gen_static_sig_script();
 const char *get_standalone_compile_script();
+
+#ifdef BACKEND_NPU
+// ACL error checking function
+inline void checkAclErrors(aclError code, const char* message = "") {
+  if (code != ACL_ERROR_NONE) {
+    const char *error_string = aclGetRecentErrMsg();
+    if (!error_string) {
+      error_string = "Unknown AscendCL error";
+    }
+    fprintf(stderr,
+            "AscendCL API error = %04d. Detail: <%s>. Message: %s\n",
+            code, error_string, message);
+    throw std::runtime_error(std::string(message) + ": " + error_string);
+  }
+}
+#else
 void ensure_cuda_context();
 
 #define checkCudaErrors(err) __checkCudaErrors(err, __FILE__, __LINE__)
@@ -129,5 +150,6 @@ inline void __checkCudaErrors(CUresult code, const char *file, const int line) {
     throw std::runtime_error(error_string);
   }
 }
+#endif
 
 }  // namespace triton_jit

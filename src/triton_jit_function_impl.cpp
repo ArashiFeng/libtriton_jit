@@ -18,11 +18,14 @@ static void ensure_initialized() {
     // Use std::call_once to ensure initialization happens only once
     static std::once_flag init_flag;
     std::call_once(init_flag, [](){
-        // When using libtriton_jit with a python C-extension, it is already initialized
         c10::initLogging();
         if (!Py_IsInitialized()) {
             Py_InitializeEx(false);
         }
+        // Set Python os.environ directly via pybind11
+        namespace py = pybind11;
+        py::gil_scoped_acquire gil;
+        py::module_::import("os").attr("environ")["TRITON_JIT_BACKEND"] = BACKEND_NAME;
     });
 }
 
@@ -110,6 +113,11 @@ const TritonKernelImpl<Backend>& TritonJITFunctionImpl<Backend>::get_kernel(
 }
 
 } // namespace triton_jit
+
+#ifdef BACKEND_NPU
+#include "triton_jit/backends/npu_backend.h"
+template class triton_jit::TritonJITFunctionImpl<triton_jit::NpuBackend>;
+#endif
 
 #ifdef BACKEND_CUDA
 #include "triton_jit/backends/cuda_backend.h"

@@ -1,11 +1,20 @@
 import importlib.util
+import os
 from argparse import ArgumentParser
 from pathlib import Path
 from typing import List, Tuple, Union
 
+# NPU requires this before importing triton
+if os.environ.get("TRITON_JIT_BACKEND", "").upper() == "NPU":
+    os.environ['TORCH_DEVICE_BACKEND_AUTOLOAD'] = '0'
+
 import torch
 import triton
 from packaging.version import Version
+
+def get_backend():
+    """Get backend from environment variable (set by C++ at runtime)."""
+    return os.environ.get("TRITON_JIT_BACKEND", "CUDA").upper()
 
 # do not specifier a cache dir for libtriton jit now
 # pylint: disable-next=wrong-import-position
@@ -222,14 +231,17 @@ def _compile_a_kernel(
     # STEP2: compile options for the backend
     opts = {"num_warps": num_warps, "num_stages": num_stages}
 
-    with torch.cuda.device(device_id):
-        # STEP3: ast source, target, compile options
-        target: triton.backends.compiler.GPUTarget = (
-            triton.runtime.driver.active.get_current_target()
-        )
-        ccinfo: triton.compiler.CompiledKernel = triton.compile(
-            src, target, options=opts
-        )
+    # STEP3: ast source, target, compile options (backend-specific)
+    backend = get_backend()
+    if backend == "NPU":
+        # NPU: no device context manager
+        target = triton.runtime.driver.active.get_current_target()
+        ccinfo = triton.compile(src, target, options=opts)
+    else:
+        # CUDA / IX: use CUDA device context
+        with torch.cuda.device(device_id):
+            target = triton.runtime.driver.active.get_current_target()
+            ccinfo = triton.compile(src, target, options=opts)
 
     # kernel's hash may not equals the dir in cache
     from triton.runtime.cache import get_cache_manager

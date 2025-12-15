@@ -1,57 +1,248 @@
+// ==============================================================================
+// test_add.cpp - Multi-backend Triton JIT Add Operation Test
+// Supported backends: CUDA, IX, NPU, MUSA
+// ==============================================================================
+
 #include "add_op.h"
-#include "c10/cuda/CUDAFunctions.h"
 #include "torch/torch.h"
 #include <iostream>
+#include <cstdlib>
+
+// ==============================================================================
+//                         BACKEND DETECTION & HEADERS
+// ==============================================================================
+
+#if defined(BACKEND_NPU)
+    // ----------------------------- NPU Backend -----------------------------
+    #include "acl/acl.h"
+    #include "acl/acl_rt.h"
+    #if __has_include("torch_npu/torch_npu.h")
+        #include <torch_npu/torch_npu.h>
+        #define HAS_TORCH_NPU 1
+    #else
+        #define HAS_TORCH_NPU 0
+    #endif
+
+#elif defined(BACKEND_MUSA)
+    // ----------------------------- MUSA Backend ----------------------------
+    // TODO: Add MUSA headers when available
+    #define HAS_TORCH_MUSA 0
+
+#else
+    // ----------------------- CUDA / IX Backend (Default) -------------------
+    #include "c10/cuda/CUDAFunctions.h"
+
+#endif
+
+// ==============================================================================
+//                         BACKEND-SPECIFIC UTILITIES
+// ==============================================================================
+
+namespace {
+
+// ----------------------------- Device Synchronize ----------------------------
+
+inline void device_synchronize() {
+#if defined(BACKEND_NPU)
+    aclrtSynchronizeDevice();
+#elif defined(BACKEND_MUSA)
+    // TODO: Add MUSA sync
+#else
+    c10::cuda::device_synchronize();
+#endif
+}
+
+// ----------------------------- Device Initialization -------------------------
+
+#if defined(BACKEND_NPU)
+
+int init_npu_device(at::Device& device) {
+    setenv("TORCH_DEVICE_BACKEND_AUTOLOAD", "0", 1);
+
+    int32_t deviceId = 1;
+    const char* deviceEnv = std::getenv("NPU_DEVICE_ID");
+    if (deviceEnv != nullptr) {
+        deviceId = std::atoi(deviceEnv);
+        std::cout << "Using NPU device from env: " << deviceId << std::endl;
+    } else {
+        std::cout << "NPU_DEVICE_ID not set, using default: " << deviceId << std::endl;
+    }
+
+    aclError ret = aclrtSetDevice(deviceId);
+    if (ret != ACL_SUCCESS) {
+        std::cerr << "aclrtSetDevice failed: " << ret << std::endl;
+        return -1;
+    }
+
+    #if HAS_TORCH_NPU
+        std::string npu_device_str = "npu:" + std::to_string(deviceId);
+        torch_npu::init_npu(npu_device_str);
+        device = at::Device(npu_device_str);
+        std::cout << "NPU initialized: " << device << std::endl;
+        return 0;
+    #else
+        std::cerr << "torch_npu not available" << std::endl;
+        return -1;
+    #endif
+}
+
+void finalize_npu_device() {
+    #if HAS_TORCH_NPU
+        int32_t deviceId = 0;
+        const char* deviceEnv = std::getenv("NPU_DEVICE_ID");
+        if (deviceEnv != nullptr) {
+            deviceId = std::atoi(deviceEnv);
+        }
+        aclrtResetDevice(deviceId);
+        aclFinalize();
+    #endif
+}
+
+#elif defined(BACKEND_MUSA)
+
+int init_musa_device(at::Device& device) {
+    // TODO: Implement MUSA initialization
+    std::cerr << "MUSA backend not yet implemented" << std::endl;
+    return -1;
+}
+
+void finalize_musa_device() {
+    // TODO: Implement MUSA finalization
+}
+
+#else  // CUDA / IX
+
+int init_cuda_device(at::Device& device) {
+    device = at::Device(at::kCUDA);
+    std::cout << "CUDA device initialized" << std::endl;
+    return 0;
+}
+
+void finalize_cuda_device() {
+    // CUDA cleanup is automatic
+}
+
+#endif
+
+// ----------------------------- Tensor Creation -------------------------------
+
+inline at::Tensor create_random_tensor(int64_t size, const at::Device& device) {
+#if defined(BACKEND_NPU)
+    return at::rand({size}, device);
+#elif defined(BACKEND_MUSA)
+    return at::rand({size}, device);
+#else
+    return at::rand({size}, at::kCUDA);
+#endif
+}
+
+}  // anonymous namespace
+
+// ==============================================================================
+//                                   MAIN
+// ==============================================================================
 
 int main() {
-    at::Tensor a = at::rand({128 * 1024}, at::kCUDA);
-    at::Tensor b = at::rand({128 * 1024}, at::kCUDA);
-    
-    // 打印输入信息
-    std::cout << "=== 输入张量信息 ===" << std::endl;
-    std::cout << "张量大小: " << a.size(0) << " 元素" << std::endl;
-    std::cout << "设备: " << a.device() << std::endl;
-    
-    // 复制到CPU后打印
+    constexpr int64_t TENSOR_SIZE = 128 * 1024;
+    constexpr int WARMUP_ITERS = 10;
+    constexpr int BENCH_ITERS = 10;
+
+    // ======================== Device Initialization ==========================
+    at::Device device(at::kCPU);
+
+#if defined(BACKEND_NPU)
+    if (init_npu_device(device) != 0) return -1;
+#elif defined(BACKEND_MUSA)
+    if (init_musa_device(device) != 0) return -1;
+#else
+    if (init_cuda_device(device) != 0) return -1;
+#endif
+
+    // ======================== Create Test Tensors ============================
+    at::Tensor a = create_random_tensor(TENSOR_SIZE, device);
+    at::Tensor b = create_random_tensor(TENSOR_SIZE, device);
+
+    std::cout << "\n=== Input Tensor Info ===" << std::endl;
+    std::cout << "Size: " << a.size(0) << " elements" << std::endl;
+    std::cout << "Device: " << a.device() << std::endl;
+
     at::Tensor a_cpu = a.cpu();
     at::Tensor b_cpu = b.cpu();
-    std::cout << "a的前5个元素: " << a_cpu.slice(0, 0, 5) << std::endl;
-    std::cout << "b的前5个元素: " << b_cpu.slice(0, 0, 5) << std::endl;
-    
-    // warm up
-    std::cout << "\n=== 执行计算 ===" << std::endl;
+    std::cout << "a[0:5]: " << a_cpu.slice(0, 0, 5) << std::endl;
+    std::cout << "b[0:5]: " << b_cpu.slice(0, 0, 5) << std::endl;
+
+    // ======================== Warm-up & Compute ==============================
+    std::cout << "\n=== Executing Computation ===" << std::endl;
     at::Tensor result1 = my_ops::add_tensor(a, b);
+#if defined(BACKEND_NPU)
+    // NPU: Use CPU computation as reference (avoid libtorch_npu aclnnAdd issues)
+    at::Tensor result2_cpu = a_cpu + b_cpu;
+#else
     at::Tensor result2 = at::add(a, b);
-    c10::cuda::device_synchronize();
-    
-    // 复制结果到CPU后打印
-    std::cout << "\n=== 计算结果 ===" << std::endl;
+#endif
+    device_synchronize();
+
+    // ======================== Result Verification ============================
+    std::cout << "\n=== Results ===" << std::endl;
     at::Tensor result1_cpu = result1.cpu();
+#if defined(BACKEND_NPU)
+    std::cout << "my_ops::add_tensor[0:5]: " << result1_cpu.slice(0, 0, 5) << std::endl;
+    std::cout << "CPU reference[0:5]:      " << result2_cpu.slice(0, 0, 5) << std::endl;
+    bool is_close = at::allclose(result1_cpu, result2_cpu);
+#else
     at::Tensor result2_cpu = result2.cpu();
-    std::cout << "my_ops::add_tensor 结果的前5个元素: " 
-              << result1_cpu.slice(0, 0, 5) << std::endl;
-    std::cout << "at::add 结果的前5个元素: " 
-              << result2_cpu.slice(0, 0, 5) << std::endl;
-    
-    // 验证结果是否一致
+    std::cout << "my_ops::add_tensor[0:5]: " << result1_cpu.slice(0, 0, 5) << std::endl;
+    std::cout << "at::add[0:5]:            " << result2_cpu.slice(0, 0, 5) << std::endl;
     bool is_close = at::allclose(result1, result2);
-    std::cout << "\n结果是否一致: " << (is_close ? "是" : "否") << std::endl;
+#endif
+    std::cout << "\nResults match: " << (is_close ? "YES" : "NO") << std::endl;
     if (!is_close) {
-        auto diff = at::abs(result1 - result2);
-        std::cout << "最大差异: " << at::max(diff).item<float>() << std::endl;
+        auto diff = at::abs(result1_cpu - result2_cpu);
+        std::cout << "Max difference: " << at::max(diff).item<float>() << std::endl;
     }
-    
-    // 原有的性能测试循环
-    for (int i = 0; i < 10; ++i) {
+
+    // ======================== Performance Benchmark ==========================
+    std::cout << "\n=== Performance Benchmark ===" << std::endl;
+
+#if !defined(BACKEND_NPU)
+    // Warm-up: at::add (skip on NPU)
+    for (int i = 0; i < WARMUP_ITERS; ++i) {
         auto tmp = at::add(a, b);
     }
-    c10::cuda::device_synchronize();
-    
-    for (int i = 0; i < 10; ++i) {
+    device_synchronize();
+#endif
+
+    // Warm-up: my_ops::add_tensor
+    for (int i = 0; i < WARMUP_ITERS; ++i) {
         auto tmp = my_ops::add_tensor(a, b);
     }
-    c10::cuda::device_synchronize();
-    
-    std::cout << "\n程序执行完成!" << std::endl;
+    device_synchronize();
+
+#if !defined(BACKEND_NPU)
+    // Benchmark: at::add (skip on NPU)
+    for (int i = 0; i < BENCH_ITERS; ++i) {
+        auto tmp = at::add(a, b);
+    }
+    device_synchronize();
+    std::cout << "at::add benchmark completed (" << BENCH_ITERS << " iters)" << std::endl;
+#endif
+
+    // Benchmark: my_ops::add_tensor
+    for (int i = 0; i < BENCH_ITERS; ++i) {
+        auto tmp = my_ops::add_tensor(a, b);
+    }
+    device_synchronize();
+    std::cout << "my_ops::add_tensor benchmark completed (" << BENCH_ITERS << " iters)" << std::endl;
+
+    // ======================== Cleanup ========================================
+#if defined(BACKEND_NPU)
+    finalize_npu_device();
+#elif defined(BACKEND_MUSA)
+    finalize_musa_device();
+#else
+    finalize_cuda_device();
+#endif
+
+    std::cout << "\nProgram completed successfully!" << std::endl;
     return 0;
 }
