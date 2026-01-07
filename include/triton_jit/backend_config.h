@@ -2,6 +2,8 @@
 
 #if defined(BACKEND_NPU)
     #include "triton_jit/backends/npu_backend.h"
+#elif defined(BACKEND_MUSA)
+    #include "triton_jit/backends/musa_backend.h"
 #elif defined(BACKEND_IX)
     #include "triton_jit/backends/ix_backend.h"
 #else
@@ -21,6 +23,10 @@ class TritonJITFunctionImpl;
 #if defined(BACKEND_NPU)
     /// Default backend for NPU (Ascend)
     using DefaultBackend = NpuBackend;
+
+#elif defined(BACKEND_MUSA)
+    /// Default backend for MUSA (Moore Threads)
+    using DefaultBackend = MusaBackend;
 
 #elif defined(BACKEND_CUDA)
     /// Default backend for CUDA

@@ -25,8 +25,14 @@
 
 #elif defined(BACKEND_MUSA)
     // ----------------------------- MUSA Backend ----------------------------
-    // TODO: Add MUSA headers when available
-    #define HAS_TORCH_MUSA 0
+    #include "musa.h"
+    #include "musa_runtime.h"
+    #if __has_include("torch_musa/torch_musa.h")
+        #include <torch_musa/torch_musa.h>
+        #define HAS_TORCH_MUSA 1
+    #else
+        #define HAS_TORCH_MUSA 0
+    #endif
 
 #else
     // ----------------------- CUDA / IX Backend (Default) -------------------
@@ -46,7 +52,7 @@ inline void device_synchronize() {
 #if defined(BACKEND_NPU)
     aclrtSynchronizeDevice();
 #elif defined(BACKEND_MUSA)
-    // TODO: Add MUSA sync
+    musaDeviceSynchronize();
 #else
     c10::cuda::device_synchronize();
 #endif
@@ -101,13 +107,31 @@ void finalize_npu_device() {
 #elif defined(BACKEND_MUSA)
 
 int init_musa_device(at::Device& device) {
-    // TODO: Implement MUSA initialization
-    std::cerr << "MUSA backend not yet implemented" << std::endl;
-    return -1;
+    int32_t deviceId = 0;
+    const char* deviceEnv = std::getenv("MUSA_DEVICE_ID");
+    if (deviceEnv != nullptr) {
+        deviceId = std::atoi(deviceEnv);
+    }
+
+    musaError_t ret = musaSetDevice(deviceId);
+    if (ret != MUSA_SUCCESS) {
+        std::cerr << "musaSetDevice failed: " << ret << std::endl;
+        return -1;
+    }
+
+    #if HAS_TORCH_MUSA
+        std::string musa_device_str = "musa:" + std::to_string(deviceId);
+        device = at::Device(musa_device_str);
+        std::cout << "MUSA initialized: " << device << std::endl;
+        return 0;
+    #else
+        std::cerr << "torch_musa not available" << std::endl;
+        return -1;
+    #endif
 }
 
 void finalize_musa_device() {
-    // TODO: Implement MUSA finalization
+    musaDeviceReset();
 }
 
 #else  // CUDA / IX
@@ -173,8 +197,8 @@ int main() {
     // ======================== Warm-up & Compute ==============================
     std::cout << "\n=== Executing Computation ===" << std::endl;
     at::Tensor result1 = my_ops::sum_dim(tensor, {1}, false, c10::nullopt);
-#if defined(BACKEND_NPU)
-    // NPU: Use CPU computation as reference
+#if defined(BACKEND_NPU) || defined(BACKEND_MUSA)
+    // NPU/MUSA: Use CPU computation as reference
     at::Tensor result2_cpu = at::sum(tensor_cpu, {1}, false, c10::nullopt);
 #else
     at::Tensor result2 = at::sum(tensor, {1}, false, c10::nullopt);
@@ -184,7 +208,7 @@ int main() {
     // ======================== Result Verification ============================
     std::cout << "\n=== Results ===" << std::endl;
     at::Tensor result1_cpu = result1.cpu();
-#if defined(BACKEND_NPU)
+#if defined(BACKEND_NPU) || defined(BACKEND_MUSA)
     std::cout << "my_ops::sum_dim[0:5]: " << result1_cpu.slice(0, 0, 5) << std::endl;
     std::cout << "CPU reference[0:5]:   " << result2_cpu.slice(0, 0, 5) << std::endl;
     bool is_close = at::allclose(result1_cpu, result2_cpu, 1e-4, 1e-4);
@@ -203,8 +227,8 @@ int main() {
     // ======================== Performance Benchmark ==========================
     std::cout << "\n=== Performance Benchmark ===" << std::endl;
 
-#if !defined(BACKEND_NPU)
-    // Warm-up: at::sum (skip on NPU)
+#if !defined(BACKEND_NPU) && !defined(BACKEND_MUSA)
+    // Warm-up: at::sum (skip on NPU/MUSA)
     for (int i = 0; i < WARMUP_ITERS; ++i) {
         auto tmp = at::sum(tensor, {1}, false, c10::nullopt);
     }
@@ -217,8 +241,8 @@ int main() {
     }
     device_synchronize();
 
-#if !defined(BACKEND_NPU)
-    // Benchmark: at::sum (skip on NPU)
+#if !defined(BACKEND_NPU) && !defined(BACKEND_MUSA)
+    // Benchmark: at::sum (skip on NPU/MUSA)
     for (int i = 0; i < BENCH_ITERS; ++i) {
         auto tmp = at::sum(tensor, {1}, false, c10::nullopt);
     }

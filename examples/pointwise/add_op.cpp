@@ -23,9 +23,10 @@
 
 #elif defined(BACKEND_MUSA)
     // ----------------------------- MUSA Backend ----------------------------
-    // TODO: Add MUSA stream headers when available
-    #define HAS_TORCH_MUSA 0
-    #warning "MUSA backend stream support not yet implemented"
+    // Use MUSA Runtime API directly (musa_runtime.h) to avoid header conflicts
+    // Do NOT include torch_musa C++ headers - they conflict with PyTorch headers
+    #include <musa_runtime.h>
+    // Note: torch_musa device registration happens at Python runtime via 'import torch_musa'
 
 #else
     // ----------------------- CUDA / IX Backend (Default) -------------------
@@ -44,7 +45,7 @@ namespace {
 #if defined(BACKEND_NPU)
     using RawStream = aclrtStream;
 #elif defined(BACKEND_MUSA)
-    using RawStream = void*;  // TODO: Replace with actual MUSA stream type
+    using RawStream = musaStream_t;
 #else
     using RawStream = CUstream;
 #endif
@@ -60,8 +61,10 @@ inline RawStream get_device_stream([[maybe_unused]] const at::Tensor& tensor) {
     #endif
 
 #elif defined(BACKEND_MUSA)
-    // TODO: Implement MUSA stream getter
-    return nullptr;
+    // Strategy: Use default stream (nullptr) for now to avoid header conflicts
+    // This is safe but may require manual synchronization if PyTorch uses different streams
+    // Runtime requirement: 'import torch_musa' must be called in Python to register device
+    return nullptr;  // Default MUSA stream
 
 #else  // CUDA / IX
     auto cuda_stream = c10::cuda::getCurrentCUDAStream(tensor.device().index());
@@ -88,8 +91,26 @@ at::Tensor add_tensor(const at::Tensor &a_, const at::Tensor &b_) {
 
     // ------------------------- Output Allocation -----------------------------
     at::ScalarType out_dtype = at::promote_types(a.scalar_type(), b.scalar_type());
+
+#if defined(BACKEND_MUSA)
+    // MUSA: Manual memory allocation to avoid missing empty operator
+    void* d_ptr = nullptr;
+    size_t num_bytes = a.numel() * at::elementSize(out_dtype);
+    musaError_t err = musaMalloc(&d_ptr, num_bytes);
+    if (err != musaSuccess) {
+        throw std::runtime_error("musaMalloc failed for output: " + std::string(musaGetErrorString(err)));
+    }
+
+    auto options = at::TensorOptions()
+        .dtype(out_dtype)
+        .device(a.device());
+
+    auto deleter = [](void* ptr) { musaFree(ptr); };
+    at::Tensor out = at::from_blob(d_ptr, a.sizes(), deleter, options);
+#else
     at::Tensor out = at::empty(a.sizes(),
         at::TensorOptions().dtype(out_dtype).device(a.device()));
+#endif
 
     // ------------------------- Kernel Parameters -----------------------------
     const TritonJITFunction &f = TritonJITFunction::get_instance(

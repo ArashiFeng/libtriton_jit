@@ -28,9 +28,14 @@
 
 #elif defined(BACKEND_MUSA)
     // ----------------------------- MUSA Backend ----------------------------
-    // TODO: Add MUSA stream headers when available
-    #define HAS_TORCH_MUSA 0
-    #warning "MUSA backend stream support not yet implemented"
+    #include <musa.h>
+    #if __has_include("torch_musa/csrc/core/musa/MUSAStream.h")
+        #include "torch_musa/csrc/core/musa/MUSAStream.h"
+        #define HAS_TORCH_MUSA 1
+    #else
+        #define HAS_TORCH_MUSA 0
+        #warning "torch_musa headers not found, MUSA stream support disabled"
+    #endif
 
 #else
     // ----------------------- CUDA / IX Backend (Default) -------------------
@@ -49,7 +54,7 @@ namespace {
 #if defined(BACKEND_NPU)
     using RawStream = aclrtStream;
 #elif defined(BACKEND_MUSA)
-    using RawStream = void*;  // TODO: Replace with actual MUSA stream type
+    using RawStream = MUstream;
 #else
     using RawStream = CUstream;
 #endif
@@ -65,8 +70,11 @@ inline RawStream get_device_stream([[maybe_unused]] const at::Tensor& tensor) {
     #endif
 
 #elif defined(BACKEND_MUSA)
-    // TODO: Implement MUSA stream getter
-    return nullptr;
+    #if HAS_TORCH_MUSA
+        return c10::musa::getCurrentMUSAStream(tensor.device().index()).stream();
+    #else
+        return nullptr;
+    #endif
 
 #else  // CUDA / IX
     auto cuda_stream = c10::cuda::getCurrentCUDAStream(tensor.device().index());

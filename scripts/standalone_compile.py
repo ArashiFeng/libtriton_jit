@@ -5,11 +5,20 @@ from argparse import ArgumentParser
 from pathlib import Path
 from typing import List, Tuple, Union
 
-# NPU requires this before importing triton
-if os.environ.get("TRITON_JIT_BACKEND", "").upper() == "NPU":
+# NPU and MTGPU require this before importing triton
+backend_env = os.environ.get("TRITON_JIT_BACKEND", "").upper()
+if backend_env in ["NPU", "MTGPU"]:
     os.environ['TORCH_DEVICE_BACKEND_AUTOLOAD'] = '0'
 
 import torch
+
+# Import backend-specific modules to activate Triton driver
+if backend_env == "MTGPU":
+    try:
+        import torch_musa  # Activate MUSA device and Triton mtgpu driver
+    except ImportError:
+        print("Warning: torch_musa not available, MTGPU backend may not work")
+
 import triton
 from packaging.version import Version
 
@@ -319,15 +328,16 @@ def _compile_a_kernel(
 
     # STEP3: ast source, target, compile options (backend-specific)
     backend = get_backend()
-    if backend == "NPU":
-        # NPU: no device context manager
+    if backend in ["NPU", "MUSA", "MTGPU"]:
+        # NPU/MUSA/MTGPU: no device context manager
+        # Note: MTGPU is the Triton backend name for MUSA (Moore Threads GPU)
         target = triton.runtime.driver.active.get_current_target()
-        ccinfo = triton.compile(src, target, options=opts)
+        ccinfo = triton.compile(src, target=target, options=opts)
     else:
         # CUDA / IX: use CUDA device context
         with torch.cuda.device(device_id):
             target = triton.runtime.driver.active.get_current_target()
-            ccinfo = triton.compile(src, target, options=opts)
+            ccinfo = triton.compile(src, target=target, options=opts)
 
     # kernel's hash may not equals the dir in cache
     from triton.runtime.cache import get_cache_manager
@@ -362,6 +372,58 @@ def _compile_a_kernel(
             json.dump(metadata, f, indent=2)
 
         print(f"[NPU] Generated arg_layout with {len(arg_layout)} runtime args: {arg_layout}")
+
+    # For MTGPU backend, compile LLIR to object file using llc
+    elif backend == "MTGPU":
+        import subprocess
+        import re
+        kernel_name = fn.__name__
+        llir_path = Path(cache_dir) / f"{kernel_name}.llir"
+        obj_path = Path(cache_dir) / f"{kernel_name}.o"
+
+        if llir_path.exists() and not obj_path.exists():
+            print(f"[MTGPU] Compiling {llir_path} to {obj_path}...")
+            try:
+                # Use MUSA llc to compile LLIR to object file
+                # Note: This requires MUSA_HOME to be set properly
+                musa_home = os.environ.get("MUSA_HOME", "/usr/local/musa")
+                llc_path = f"{musa_home}/bin/llc"
+
+                # Read LLIR and fix LLVM 15+ attributes for LLVM 14 compatibility
+                with open(llir_path, 'r') as f:
+                    llir_content = f.read()
+
+                # Fix memory attributes: memory(none) -> readnone, memory(read) -> readonly, etc.
+                llir_content = re.sub(r'\bmemory\(none\)', 'readnone', llir_content)
+                llir_content = re.sub(r'\bmemory\(read\)', 'readonly', llir_content)
+                llir_content = re.sub(r'\bmemory\(write\)', 'writeonly', llir_content)
+                llir_content = re.sub(r'\bmemory\(argmem:\s*read\)', 'argmemonly readonly', llir_content)
+                llir_content = re.sub(r'\bmemory\(argmem:\s*write\)', 'argmemonly writeonly', llir_content)
+                llir_content = re.sub(r'\bmemory\(argmem:\s*readwrite\)', 'argmemonly', llir_content)
+
+                # Write fixed LLIR to temporary file
+                fixed_llir_path = llir_path.with_suffix('.fixed.llir')
+                with open(fixed_llir_path, 'w') as f:
+                    f.write(llir_content)
+
+                # Compile LLIR to object file with opaque pointers support
+                result = subprocess.run(
+                    [llc_path, "-march=mtgpu", "-mcpu=mp_21", "-opaque-pointers",
+                     "-filetype=obj", str(fixed_llir_path), "-o", str(obj_path)],
+                    capture_output=True, text=True
+                )
+
+                # Clean up temporary file
+                fixed_llir_path.unlink(missing_ok=True)
+
+                if result.returncode != 0:
+                    print(f"[MTGPU] llc compilation failed: {result.stderr}")
+                    print(f"[MTGPU] Warning: Binary compilation failed, will use runtime compilation")
+                else:
+                    print(f"[MTGPU] Successfully compiled to {obj_path}")
+                    print(f"[MTGPU] Object file size: {obj_path.stat().st_size} bytes")
+            except Exception as e:
+                print(f"[MTGPU] Compilation failed: {e}")
 
     return cache_dir
 

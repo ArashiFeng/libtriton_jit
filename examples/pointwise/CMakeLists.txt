@@ -20,8 +20,9 @@ function(configure_backend_target TARGET_NAME)
 
     elseif(BACKEND STREQUAL "MUSA")
         # ------------------------- MUSA Backend -------------------------------
-        # TODO: Add MUSA-specific configuration
-        # target_link_musa_libraries(${TARGET_NAME})
+        target_link_musa_libraries(${TARGET_NAME})
+        # MUSA backend uses pybind11 for torch_musa import
+        target_link_libraries(${TARGET_NAME} PRIVATE pybind11::embed)
 
     else()
         # ------------------------- CUDA / IX Backend --------------------------
@@ -74,9 +75,20 @@ target_include_directories(test_add
 
 target_link_libraries(test_add
     PRIVATE add_op
-    PRIVATE Torch::Torch
     PRIVATE TritonJIT::triton_jit
+    PRIVATE Torch::Torch
 )
 
 configure_backend_target(test_add)
+
+# Force link ittnotify to resolve PyTorch's dependency
+# Use --no-as-needed to ensure the library is retained even though it appears
+# before libtorch_cpu.so in the link order
+if(ITTNOTIFY_LIBRARY)
+    target_link_libraries(test_add
+        PRIVATE "-Wl,--no-as-needed"
+        PRIVATE ${ITTNOTIFY_LIBRARY}
+        PRIVATE "-Wl,--as-needed"
+    )
+endif()
 add_dependencies(test_add copy_triton_pointwise_src)

@@ -26,6 +26,17 @@ static void ensure_initialized() {
         namespace py = pybind11;
         py::gil_scoped_acquire gil;
         py::module_::import("os").attr("environ")["TRITON_JIT_BACKEND"] = BACKEND_NAME;
+
+        // Import backend-specific modules for device registration
+        std::string backend_name(BACKEND_NAME);
+        if (backend_name == "mtgpu") {
+            try {
+                // Import torch_musa to register MUSA as PrivateUse1 backend
+                py::module_::import("torch_musa");
+            } catch (const py::error_already_set& e) {
+                std::cerr << "Warning: Failed to import torch_musa: " << e.what() << std::endl;
+            }
+        }
     });
 }
 
@@ -127,4 +138,9 @@ template class triton_jit::TritonJITFunctionImpl<triton_jit::CudaBackend>;
 #ifdef BACKEND_IX
 #include "triton_jit/backends/ix_backend.h"
 template class triton_jit::TritonJITFunctionImpl<triton_jit::IxBackend>;
+#endif
+
+#ifdef BACKEND_MUSA
+#include "triton_jit/backends/musa_backend.h"
+template class triton_jit::TritonJITFunctionImpl<triton_jit::MusaBackend>;
 #endif

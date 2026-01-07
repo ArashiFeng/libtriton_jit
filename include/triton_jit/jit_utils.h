@@ -11,6 +11,8 @@
 
 #ifdef BACKEND_NPU
 #include "acl/acl.h"
+#elif defined(BACKEND_MUSA)
+#include <musa.h>
 #else
 #include "cuda.h"
 #endif
@@ -129,6 +131,23 @@ inline void checkAclErrors(aclError code, const char* message = "") {
             "AscendCL API error = %04d. Detail: <%s>. Message: %s\n",
             code, error_string, message);
     throw std::runtime_error(std::string(message) + ": " + error_string);
+  }
+}
+#elif defined(BACKEND_MUSA)
+#define checkMusaErrors(err) __checkMusaErrors(err, __FILE__, __LINE__)
+
+// Error handling function using exceptions instead of exit()
+inline void __checkMusaErrors(MUresult code, const char *file, const int line) {
+  if (code != MUSA_SUCCESS) {
+    const char *error_string;
+    muGetErrorString(code, &error_string);
+    fprintf(stderr,
+            "MUSA Driver API error = %04d from file <%s>, line %i. Detail: <%s>\n",
+            code,
+            file,
+            line,
+            error_string);
+    throw std::runtime_error(error_string);
   }
 }
 #else

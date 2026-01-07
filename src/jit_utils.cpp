@@ -63,7 +63,7 @@ std::filesystem::path get_home_directory() {
   return home_dir;
 }
 
-#ifndef BACKEND_NPU
+#if !defined(BACKEND_NPU) && !defined(BACKEND_MUSA)
 void ensure_cuda_context() {
   CUcontext pctx;
   checkCudaErrors(cuCtxGetCurrent(&pctx));

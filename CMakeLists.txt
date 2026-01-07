@@ -11,8 +11,10 @@ if(NOT BACKEND MATCHES "^(CUDA|IX|MUSA|NPU)$")
 endif()
 message(STATUS "Building with backend: ${BACKEND}")
 
-# Project definition (NPU doesn't need CUDA language)
+# Project definition (NPU and MUSA don't need CUDA language)
 if(BACKEND STREQUAL "NPU")
+    project(TritonJIT LANGUAGES CXX VERSION 0.1.0)
+elseif(BACKEND STREQUAL "MUSA")
     project(TritonJIT LANGUAGES CXX VERSION 0.1.0)
 else()
     project(TritonJIT LANGUAGES CUDA CXX VERSION 0.1.0)
@@ -34,7 +36,13 @@ elseif(BACKEND STREQUAL "MUSA")
 endif()
 
 # String macro for Python runtime
-add_compile_definitions(BACKEND_NAME="${BACKEND}")
+# Map MUSA to mtgpu for Triton backend name
+if(BACKEND STREQUAL "MUSA")
+    set(TRITON_BACKEND_NAME "mtgpu")
+else()
+    set(TRITON_BACKEND_NAME "${BACKEND}")
+endif()
+add_compile_definitions(BACKEND_NAME="${TRITON_BACKEND_NAME}")
 
 # ==============================================================================
 # Project-wide Settings
@@ -42,7 +50,7 @@ add_compile_definitions(BACKEND_NAME="${BACKEND}")
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-if(NOT BACKEND STREQUAL "NPU")
+if(NOT (BACKEND STREQUAL "NPU" OR BACKEND STREQUAL "MUSA"))
     set(CMAKE_CUDA_STANDARD 17)
 endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -105,6 +113,30 @@ message(STATUS "Python: ${Python_EXECUTABLE}")
 message(STATUS "Python site-packages: ${Python_SITELIB}")
 
 find_package(Torch MODULE REQUIRED)
+
+# Find Intel ITT Notify library (required by PyTorch)
+# Get conda prefix from Python executable path
+get_filename_component(PYTHON_BIN_DIR ${Python_EXECUTABLE} DIRECTORY)
+get_filename_component(CONDA_ENV_ROOT ${PYTHON_BIN_DIR} DIRECTORY)
+
+find_library(ITTNOTIFY_LIBRARY
+    NAMES ittnotify libittnotify
+    PATHS
+        ${CONDA_ENV_ROOT}
+        ${Python_SITELIB}/../..
+        ENV CONDA_PREFIX
+    PATH_SUFFIXES lib lib64
+    NO_DEFAULT_PATH
+)
+# Fallback to default paths if not found
+if(NOT ITTNOTIFY_LIBRARY)
+    find_library(ITTNOTIFY_LIBRARY NAMES ittnotify libittnotify)
+endif()
+if(ITTNOTIFY_LIBRARY)
+    message(STATUS "Found ittnotify library: ${ITTNOTIFY_LIBRARY}")
+else()
+    message(WARNING "ittnotify library not found - test executables may fail to link")
+endif()
 
 # ==============================================================================
 # Backend-specific Dependencies (modular)
