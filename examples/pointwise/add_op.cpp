@@ -125,6 +125,8 @@ at::Tensor add_tensor(const at::Tensor &a_, const at::Tensor &b_) {
     // ------------------------- Kernel Launch ---------------------------------
     c10::DeviceGuard guard(out.device());
     RawStream stream = get_device_stream(a);
+
+    // Launch kernel
     f(stream, num_blocks, 1, 1, num_warps, num_stages, a, b, out, n, tile_size);
 
     return out;

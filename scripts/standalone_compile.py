@@ -373,57 +373,46 @@ def _compile_a_kernel(
 
         print(f"[NPU] Generated arg_layout with {len(arg_layout)} runtime args: {arg_layout}")
 
-    # For MTGPU backend, compile LLIR to object file using llc
+    # For MTGPU backend: Use official mtgpu.translate_llvmir_to_mubin() for compilation
     elif backend == "MTGPU":
-        import subprocess
-        import re
+        from triton._C.libtriton import mtgpu
+        import shutil
+
         kernel_name = fn.__name__
         llir_path = Path(cache_dir) / f"{kernel_name}.llir"
-        obj_path = Path(cache_dir) / f"{kernel_name}.o"
 
-        if llir_path.exists() and not obj_path.exists():
-            print(f"[MTGPU] Compiling {llir_path} to {obj_path}...")
+        if llir_path.exists():
             try:
-                # Use MUSA llc to compile LLIR to object file
-                # Note: This requires MUSA_HOME to be set properly
-                musa_home = os.environ.get("MUSA_HOME", "/usr/local/musa")
-                llc_path = f"{musa_home}/bin/llc"
-
-                # Read LLIR and fix LLVM 15+ attributes for LLVM 14 compatibility
                 with open(llir_path, 'r') as f:
                     llir_content = f.read()
 
-                # Fix memory attributes: memory(none) -> readnone, memory(read) -> readonly, etc.
-                llir_content = re.sub(r'\bmemory\(none\)', 'readnone', llir_content)
-                llir_content = re.sub(r'\bmemory\(read\)', 'readonly', llir_content)
-                llir_content = re.sub(r'\bmemory\(write\)', 'writeonly', llir_content)
-                llir_content = re.sub(r'\bmemory\(argmem:\s*read\)', 'argmemonly readonly', llir_content)
-                llir_content = re.sub(r'\bmemory\(argmem:\s*write\)', 'argmemonly writeonly', llir_content)
-                llir_content = re.sub(r'\bmemory\(argmem:\s*readwrite\)', 'argmemonly', llir_content)
+                # Compilation options (from official Triton MUSA backend compiler.py)
+                opt_option = "-mtgpu-enable-const-calc=1 -mtgpu-tiny-offset-hint=1 -mtgpu-alloc-shared-memory-from-zero=1"
 
-                # Write fixed LLIR to temporary file
-                fixed_llir_path = llir_path.with_suffix('.fixed.llir')
-                with open(fixed_llir_path, 'w') as f:
-                    f.write(llir_content)
+                # Get capability from target (default to 22 for S5000)
+                capability = getattr(target, 'arch', 22)
+                if isinstance(capability, tuple):
+                    capability = capability[0] * 10 + capability[1]
 
-                # Compile LLIR to object file with opaque pointers support
-                result = subprocess.run(
-                    [llc_path, "-march=mtgpu", "-mcpu=mp_21", "-opaque-pointers",
-                     "-filetype=obj", str(fixed_llir_path), "-o", str(obj_path)],
-                    capture_output=True, text=True
+                # Use official compilation function (same as Triton MUSA backend)
+                asm_str, mubin_tmp_path = mtgpu.translate_llvmir_to_mubin(
+                    llir_content, opt_option, capability, 0
                 )
 
-                # Clean up temporary file
-                fixed_llir_path.unlink(missing_ok=True)
+                # Copy mubin to cache directory
+                mubin_path = Path(cache_dir) / f"{kernel_name}.mubin"
+                shutil.copy2(mubin_tmp_path, mubin_path)
 
-                if result.returncode != 0:
-                    print(f"[MTGPU] llc compilation failed: {result.stderr}")
-                    print(f"[MTGPU] Warning: Binary compilation failed, will use runtime compilation")
-                else:
-                    print(f"[MTGPU] Successfully compiled to {obj_path}")
-                    print(f"[MTGPU] Object file size: {obj_path.stat().st_size} bytes")
+                # Optionally save ASM for debugging
+                if os.environ.get("MUSA_ASM_ENABLE_DUMP", "0") == "1":
+                    asm_path = Path(cache_dir) / f"{kernel_name}.asm"
+                    with open(asm_path, 'w') as f:
+                        f.write(asm_str)
+
             except Exception as e:
-                print(f"[MTGPU] Compilation failed: {e}")
+                import traceback
+                import sys
+                sys.stderr.write(f"[MTGPU] Compilation failed: {e}\n{traceback.format_exc()}\n")
 
     return cache_dir
 

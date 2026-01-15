@@ -53,3 +53,12 @@ cmake_install.cmake
 # Other temporary files
 *.log
 *.tmp
+*.bak
+
+# IDE/Editor cache
+.cache/
+
+# Debug scripts (not needed in repo)
+debug_*.sh
+auto_compare_*.py
+DEBUG_GUIDE.md

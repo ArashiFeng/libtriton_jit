@@ -7,7 +7,6 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
-#include <vector>
 
 #include "c10/util/Logging.h"
 #include "fmt/core.h"
@@ -30,8 +29,9 @@ struct MusaBackend {
     using ContextType = MUcontext;
     using KernelHandle = MUfunction;
 
-    // MUSA warp size is 64 threads, as specified by the user.
-    static constexpr unsigned int WARP_SIZE = 64;
+    // MUSA warp size: Triton MUSA backend uses 32, matching CUDA convention
+    // Note: Actual MUSA hardware may have different warp size, but Triton compiles with 32
+    static constexpr unsigned int WARP_SIZE = 32;
 
     struct ModuleData {
         MUmodule module;
@@ -49,8 +49,6 @@ struct MusaBackend {
         void** args,
         unsigned int shared_memory = 0
     ) {
-        LOG(INFO) << "muLaunchKernel";
-
         MUresult result = muLaunchKernel(
             kernel,
             grid_x, grid_y, grid_z,        // Grid dimensions
@@ -66,6 +64,16 @@ struct MusaBackend {
             muGetErrorString(result, &error_string);
             throw std::runtime_error(
                 fmt::format("MUSA kernel launch failed: {}", error_string)
+            );
+        }
+
+        // Synchronize and check for async errors
+        MUresult syncResult = muStreamSynchronize(stream);
+        if (syncResult != MUSA_SUCCESS) {
+            const char* error_string;
+            muGetErrorString(syncResult, &error_string);
+            throw std::runtime_error(
+                fmt::format("MUSA stream synchronize failed: {}", error_string)
             );
         }
     }
@@ -123,41 +131,42 @@ struct MusaBackend {
         nlohmann::json meta_data = nlohmann::json::parse(f);
         MusaKernelMetadata metadata;
         metadata.shared = meta_data["shared"];
-        
-        LOG(INFO) << fmt::format(
-            "Loading MUSA kernel {} with shared_mem={}",
-            kernel_name, metadata.shared);
 
-        // Try to load pre-compiled binaries in priority order: .o (ELF), .so, .llir
+        // Try to load pre-compiled binaries in priority order: .mubin, .o (ELF), .so, .llir
         MUmodule module = nullptr;
+        std::string mubin_path = fmt::format("{}/{}.mubin", dir, kernel_name);
         std::string obj_path = fmt::format("{}/{}.o", dir, kernel_name);
         std::string so_path = fmt::format("{}/{}.so", dir, kernel_name);
         std::string llir_path = fmt::format("{}/{}.llir", dir, kernel_name);
 
-        if (std::filesystem::exists(obj_path)) {
-            LOG(INFO) << fmt::format("Loading MUSA object file from {} using muModuleLoadData", obj_path);
-
-            // Read .o file as binary data
-            std::ifstream obj_file(obj_path, std::ios::binary);
-            if (!obj_file.is_open()) {
+        if (std::filesystem::exists(mubin_path)) {
+            // Read mubin file as binary
+            std::ifstream mubin_file(mubin_path, std::ios::binary | std::ios::ate);
+            if (!mubin_file.is_open()) {
                 throw std::runtime_error(
-                    fmt::format("Failed to open object file: {}", obj_path));
+                    fmt::format("Failed to open mubin file: {}", mubin_path));
             }
 
-            std::vector<char> obj_data((std::istreambuf_iterator<char>(obj_file)),
-                                        std::istreambuf_iterator<char>());
+            std::streamsize size = mubin_file.tellg();
+            mubin_file.seekg(0, std::ios::beg);
 
-            LOG(INFO) << fmt::format("Loaded {} bytes from {}", obj_data.size(), obj_path);
+            std::vector<char> mubin_data(size);
+            if (!mubin_file.read(mubin_data.data(), size)) {
+                throw std::runtime_error(
+                    fmt::format("Failed to read mubin file: {}", mubin_path));
+            }
 
-            // Use muModuleLoadData to load the ELF object directly
-            checkMusaErrors(muModuleLoadData(&module, obj_data.data()));
+            // Use muModuleLoadData to load the compiled binary
+            checkMusaErrors(muModuleLoadData(&module, mubin_data.data()));
+
+        } else if (std::filesystem::exists(obj_path)) {
+            // Use muModuleLoad to load the ELF object file by path
+            checkMusaErrors(muModuleLoad(&module, obj_path.c_str()));
 
         } else if (std::filesystem::exists(so_path)) {
-            LOG(INFO) << fmt::format("Loading MUSA shared library from {}", so_path);
             checkMusaErrors(muModuleLoad(&module, so_path.c_str()));
 
         } else if (std::filesystem::exists(llir_path)) {
-            LOG(INFO) << fmt::format("Loading MUSA LLIR from {} (runtime JIT)", llir_path);
 
             // Read LLIR file
             std::ifstream llir_file(llir_path, std::ios::binary);
@@ -174,7 +183,7 @@ struct MusaBackend {
 
         } else {
             throw std::runtime_error(
-                fmt::format("No binary (.o, .so) or LLIR found for kernel {} in {}",
+                fmt::format("No binary (.mubin, .o, .so) or LLIR found for kernel {} in {}",
                             kernel_name, dir));
         }
 
