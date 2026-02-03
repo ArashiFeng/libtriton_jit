@@ -3,57 +3,114 @@
 // ==============================================================================
 
 #include "rms_norm_op.h"
-#include "torch/torch.h"
+#include "test_framework.h"
+#include "benchmark_utils.h"
+
 #include <iostream>
 
-#if defined(BACKEND_NPU)
-    #include "acl/acl.h"
-#elif defined(BACKEND_MUSA)
-    #include "musa_runtime.h"
-    #include "pybind11/embed.h"
-#else
-    #include "c10/cuda/CUDAFunctions.h"
-#endif
+using namespace triton_jit::test;
+using namespace triton_jit::benchmark;
 
-namespace {
+int test_rms_norm_basic(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Test: rms_norm_basic ===" << std::endl;
 
-inline void device_synchronize() {
-#if defined(BACKEND_NPU)
-    aclrtSynchronizeDevice();
-#elif defined(BACKEND_MUSA)
-    musaDeviceSynchronize();
-#else
-    c10::cuda::device_synchronize();
-#endif
-}
-
-}  // anonymous namespace
-
-int main() {
     constexpr int64_t BATCH = 16;
     constexpr int64_t HIDDEN = 1024;
 
-#if defined(BACKEND_MUSA)
-    namespace py = pybind11;
-    py::scoped_interpreter guard{};
-    py::module_::import("torch_musa");
-    at::Device device(at::DeviceType::PrivateUse1, 0);
-#elif defined(BACKEND_NPU)
-    at::Device device(at::kPrivateUse1);
-#else
-    at::Device device(at::kCUDA);
-#endif
-
-    at::Tensor input = at::randn({BATCH, HIDDEN}, at::TensorOptions().device(device));
-    at::Tensor weight = at::ones({HIDDEN}, at::TensorOptions().device(device));
-
-    std::cout << "Testing rms_norm operator..." << std::endl;
-    std::cout << "Input shape: [" << BATCH << ", " << HIDDEN << "]" << std::endl;
+    at::Tensor input = tf.rand({BATCH, HIDDEN});
+    at::Tensor weight = tf.ones({HIDDEN});
+    dm.synchronize();
 
     at::Tensor result = my_ops::rms_norm(input, weight, 1e-6);
-    device_synchronize();
+    dm.synchronize();
 
-    std::cout << "Output shape: [" << result.size(0) << ", " << result.size(1) << "]" << std::endl;
-    std::cout << "RMS norm test completed!" << std::endl;
+    // Verify output shape
+    bool shape_match = (result.sizes() == input.sizes());
+    std::cout << "Output shape: " << result.sizes() << std::endl;
+    TEST_ASSERT(shape_match, "Output shape should match input shape");
+
+    // Verify RMS normalization property: output should have unit RMS per row
+    at::Tensor rms = (result * result).mean(-1).sqrt();
+    at::Tensor expected_rms = tf.ones({BATCH});
+    dm.synchronize();
+
+    CorrectnessResult cr = CorrectnessChecker::compare(rms, expected_rms, 1e-4, 1e-4);
+    std::cout << "RMS close to 1: " << (cr.passed ? "YES" : "NO") << std::endl;
+
+    std::cout << "[PASS] rms_norm_basic" << std::endl;
+    return 0;
+}
+
+int test_rms_norm_with_weight(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Test: rms_norm_with_weight ===" << std::endl;
+
+    constexpr int64_t BATCH = 8;
+    constexpr int64_t HIDDEN = 512;
+
+    at::Tensor input = tf.rand({BATCH, HIDDEN});
+    at::Tensor weight = tf.rand({HIDDEN});
+    dm.synchronize();
+
+    at::Tensor result = my_ops::rms_norm(input, weight, 1e-6);
+    dm.synchronize();
+
+    std::cout << "Output shape: " << result.sizes() << std::endl;
+    TEST_ASSERT(result.sizes() == input.sizes(), "Shape should match");
+
+    std::cout << "[PASS] rms_norm_with_weight" << std::endl;
+    return 0;
+}
+
+int test_rms_norm_benchmark(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Benchmark: rms_norm ===" << std::endl;
+
+    constexpr int64_t BATCH = 1024;
+    constexpr int64_t HIDDEN = 4096;
+    constexpr int WARMUP = 10;
+    constexpr int ITERS = 100;
+
+    at::Tensor input = tf.rand({BATCH, HIDDEN});
+    at::Tensor weight = tf.ones({HIDDEN});
+    dm.synchronize();
+
+    BenchmarkRunner runner(WARMUP, ITERS);
+    auto stats = runner.run(
+        [&]() { my_ops::rms_norm(input, weight, 1e-6); },
+        [&]() { dm.synchronize(); }
+    );
+
+    // Read input + weight + write output
+    int64_t bytes = BATCH * HIDDEN * sizeof(float) * 2 + HIDDEN * sizeof(float);
+    double bandwidth = calculate_bandwidth_gbps(bytes, stats.mean);
+
+    std::cout << "Shape: (" << BATCH << ", " << HIDDEN << ")" << std::endl;
+    std::cout << "Mean latency: " << stats.mean << " us" << std::endl;
+    std::cout << "Bandwidth:    " << bandwidth << " GB/s" << std::endl;
+
+    return 0;
+}
+
+int main() {
+    std::cout << "============================================" << std::endl;
+    std::cout << "  Triton JIT RMS Norm Operator Test Suite  " << std::endl;
+    std::cout << "============================================" << std::endl;
+
+    DeviceManager dm;
+    if (dm.initialize() != 0) {
+        std::cerr << "Failed to initialize device" << std::endl;
+        return -1;
+    }
+
+    std::cout << "Backend: " << dm.get_backend_name() << std::endl;
+    TensorFactory tf(dm);
+
+    RUN_TEST(test_rms_norm_basic(dm, tf));
+    RUN_TEST(test_rms_norm_with_weight(dm, tf));
+    RUN_TEST(test_rms_norm_benchmark(dm, tf));
+
+    std::cout << "\n============================================" << std::endl;
+    std::cout << "  All tests passed!" << std::endl;
+    std::cout << "============================================" << std::endl;
+
     return 0;
 }

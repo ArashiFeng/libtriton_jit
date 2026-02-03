@@ -3,59 +3,118 @@
 // ==============================================================================
 
 #include "fused_add_rms_norm_op.h"
-#include "torch/torch.h"
+#include "test_framework.h"
+#include "benchmark_utils.h"
+
 #include <iostream>
 
-#if defined(BACKEND_NPU)
-    #include "acl/acl.h"
-#elif defined(BACKEND_MUSA)
-    #include "musa_runtime.h"
-    #include "pybind11/embed.h"
-#else
-    #include "c10/cuda/CUDAFunctions.h"
-#endif
+using namespace triton_jit::test;
+using namespace triton_jit::benchmark;
 
-namespace {
+int test_fused_add_rms_norm_basic(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Test: fused_add_rms_norm_basic ===" << std::endl;
 
-inline void device_synchronize() {
-#if defined(BACKEND_NPU)
-    aclrtSynchronizeDevice();
-#elif defined(BACKEND_MUSA)
-    musaDeviceSynchronize();
-#else
-    c10::cuda::device_synchronize();
-#endif
-}
-
-}  // anonymous namespace
-
-int main() {
     constexpr int64_t BATCH = 16;
     constexpr int64_t HIDDEN = 1024;
 
-#if defined(BACKEND_MUSA)
-    namespace py = pybind11;
-    py::scoped_interpreter guard{};
-    py::module_::import("torch_musa");
-    at::Device device(at::DeviceType::PrivateUse1, 0);
-#elif defined(BACKEND_NPU)
-    at::Device device(at::kPrivateUse1);
-#else
-    at::Device device(at::kCUDA);
-#endif
-
-    at::Tensor input = at::randn({BATCH, HIDDEN}, at::TensorOptions().device(device));
-    at::Tensor residual = at::randn({BATCH, HIDDEN}, at::TensorOptions().device(device));
-    at::Tensor weight = at::ones({HIDDEN}, at::TensorOptions().device(device));
-
-    std::cout << "Testing fused_add_rms_norm operator..." << std::endl;
-    std::cout << "Input shape: [" << BATCH << ", " << HIDDEN << "]" << std::endl;
+    at::Tensor input = tf.rand({BATCH, HIDDEN});
+    at::Tensor residual = tf.rand({BATCH, HIDDEN});
+    at::Tensor weight = tf.ones({HIDDEN});
+    dm.synchronize();
 
     auto [output, res_out] = my_ops::fused_add_rms_norm(input, residual, weight, 1e-6);
-    device_synchronize();
+    dm.synchronize();
 
-    std::cout << "Output shape: [" << output.size(0) << ", " << output.size(1) << "]" << std::endl;
-    std::cout << "Residual out shape: [" << res_out.size(0) << ", " << res_out.size(1) << "]" << std::endl;
-    std::cout << "Fused add RMS norm test completed!" << std::endl;
+    std::cout << "Output shape: " << output.sizes() << std::endl;
+    std::cout << "Residual out shape: " << res_out.sizes() << std::endl;
+
+    TEST_ASSERT(output.sizes() == input.sizes(), "Output shape should match input");
+    TEST_ASSERT(res_out.sizes() == input.sizes(), "Residual out shape should match input");
+
+    // Verify residual = input + residual
+    at::Tensor expected_res = input + residual;
+    dm.synchronize();
+
+    CorrectnessResult cr = CorrectnessChecker::compare(res_out, expected_res, 1e-4, 1e-4);
+    std::cout << "Residual correct: " << (cr.passed ? "YES" : "NO") << std::endl;
+    TEST_ASSERT(cr.passed, "Residual should equal input + residual");
+
+    std::cout << "[PASS] fused_add_rms_norm_basic" << std::endl;
+    return 0;
+}
+
+int test_fused_add_rms_norm_with_weight(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Test: fused_add_rms_norm_with_weight ===" << std::endl;
+
+    constexpr int64_t BATCH = 8;
+    constexpr int64_t HIDDEN = 512;
+
+    at::Tensor input = tf.rand({BATCH, HIDDEN});
+    at::Tensor residual = tf.rand({BATCH, HIDDEN});
+    at::Tensor weight = tf.rand({HIDDEN});
+    dm.synchronize();
+
+    auto [output, res_out] = my_ops::fused_add_rms_norm(input, residual, weight, 1e-6);
+    dm.synchronize();
+
+    std::cout << "Output shape: " << output.sizes() << std::endl;
+    TEST_ASSERT(output.sizes() == input.sizes(), "Shape should match");
+
+    std::cout << "[PASS] fused_add_rms_norm_with_weight" << std::endl;
+    return 0;
+}
+
+int test_fused_add_rms_norm_benchmark(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Benchmark: fused_add_rms_norm ===" << std::endl;
+
+    constexpr int64_t BATCH = 1024;
+    constexpr int64_t HIDDEN = 4096;
+    constexpr int WARMUP = 10;
+    constexpr int ITERS = 100;
+
+    at::Tensor input = tf.rand({BATCH, HIDDEN});
+    at::Tensor residual = tf.rand({BATCH, HIDDEN});
+    at::Tensor weight = tf.ones({HIDDEN});
+    dm.synchronize();
+
+    BenchmarkRunner runner(WARMUP, ITERS);
+    auto stats = runner.run(
+        [&]() { my_ops::fused_add_rms_norm(input, residual, weight, 1e-6); },
+        [&]() { dm.synchronize(); }
+    );
+
+    // Read input + residual + weight, write output + residual_out
+    int64_t bytes = BATCH * HIDDEN * sizeof(float) * 4 + HIDDEN * sizeof(float);
+    double bandwidth = calculate_bandwidth_gbps(bytes, stats.mean);
+
+    std::cout << "Shape: (" << BATCH << ", " << HIDDEN << ")" << std::endl;
+    std::cout << "Mean latency: " << stats.mean << " us" << std::endl;
+    std::cout << "Bandwidth:    " << bandwidth << " GB/s" << std::endl;
+
+    return 0;
+}
+
+int main() {
+    std::cout << "===================================================" << std::endl;
+    std::cout << "  Triton JIT Fused Add RMS Norm Operator Test Suite" << std::endl;
+    std::cout << "===================================================" << std::endl;
+
+    DeviceManager dm;
+    if (dm.initialize() != 0) {
+        std::cerr << "Failed to initialize device" << std::endl;
+        return -1;
+    }
+
+    std::cout << "Backend: " << dm.get_backend_name() << std::endl;
+    TensorFactory tf(dm);
+
+    RUN_TEST(test_fused_add_rms_norm_basic(dm, tf));
+    RUN_TEST(test_fused_add_rms_norm_with_weight(dm, tf));
+    RUN_TEST(test_fused_add_rms_norm_benchmark(dm, tf));
+
+    std::cout << "\n===================================================" << std::endl;
+    std::cout << "  All tests passed!" << std::endl;
+    std::cout << "===================================================" << std::endl;
+
     return 0;
 }

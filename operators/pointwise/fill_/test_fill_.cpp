@@ -3,62 +3,113 @@
 // ==============================================================================
 
 #include "fill_op.h"
-#include "torch/torch.h"
+#include "test_framework.h"
+#include "benchmark_utils.h"
+
 #include <iostream>
 
-#if defined(BACKEND_NPU)
-    #include "acl/acl.h"
-#elif defined(BACKEND_MUSA)
-    #include "musa_runtime.h"
-    #include "pybind11/embed.h"
-#else
-    #include "c10/cuda/CUDAFunctions.h"
-#endif
+using namespace triton_jit::test;
+using namespace triton_jit::benchmark;
 
-namespace {
+int test_fill_inplace_basic(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Test: fill_inplace_basic ===" << std::endl;
 
-inline void device_synchronize() {
-#if defined(BACKEND_NPU)
-    aclrtSynchronizeDevice();
-#elif defined(BACKEND_MUSA)
-    musaDeviceSynchronize();
-#else
-    c10::cuda::device_synchronize();
-#endif
-}
-
-}  // anonymous namespace
-
-int main() {
     constexpr int64_t SIZE = 1024;
     constexpr float FILL_VALUE = 3.14f;
 
-#if defined(BACKEND_MUSA)
-    namespace py = pybind11;
-    py::scoped_interpreter guard{};
-    py::module_::import("torch_musa");
-    at::Device device(at::DeviceType::PrivateUse1, 0);
-#elif defined(BACKEND_NPU)
-    at::Device device(at::kPrivateUse1);
-#else
-    at::Device device(at::kCUDA);
-#endif
-
-    at::Tensor tensor = at::empty({SIZE}, at::TensorOptions().device(device));
-
-    std::cout << "Testing fill_ operator..." << std::endl;
-    std::cout << "Tensor size: " << SIZE << std::endl;
-    std::cout << "Fill value: " << FILL_VALUE << std::endl;
+    at::Tensor tensor = tf.rand({SIZE});
+    dm.synchronize();
 
     my_ops::fill_(tensor, FILL_VALUE);
-    device_synchronize();
+    dm.synchronize();
 
-#if !defined(BACKEND_NPU) && !defined(BACKEND_MUSA)
-    at::Tensor expected = at::full({SIZE}, FILL_VALUE, at::TensorOptions().device(device));
-    bool match = at::allclose(tensor, expected);
-    std::cout << "Results match reference: " << (match ? "YES" : "NO") << std::endl;
-#endif
+    at::Tensor expected = tf.full({SIZE}, FILL_VALUE);
+    dm.synchronize();
 
-    std::cout << "fill_ test completed!" << std::endl;
+    CorrectnessResult cr = CorrectnessChecker::compare(tensor, expected, 1e-6, 1e-6);
+    TestRunner::print_result(cr);
+
+    TEST_ASSERT(cr.passed, "fill_inplace_basic correctness check failed");
+    return 0;
+}
+
+int test_fill_inplace_shapes(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Test: fill_inplace_shapes ===" << std::endl;
+
+    std::vector<std::vector<int64_t>> shapes = {
+        {1}, {1024}, {64, 64}, {16, 32, 64}
+    };
+
+    for (const auto& shape : shapes) {
+        at::Tensor tensor = tf.rand(shape);
+        dm.synchronize();
+
+        my_ops::fill_(tensor, 42.0f);
+        dm.synchronize();
+
+        at::Tensor expected = tf.full(shape, 42.0);
+        dm.synchronize();
+
+        CorrectnessResult cr = CorrectnessChecker::compare(tensor, expected, 1e-6, 1e-6);
+
+        std::cout << "Shape [";
+        for (size_t i = 0; i < shape.size(); ++i) {
+            std::cout << shape[i] << (i < shape.size() - 1 ? ", " : "");
+        }
+        std::cout << "]: " << (cr.passed ? "PASS" : "FAIL") << std::endl;
+
+        TEST_ASSERT(cr.passed, "fill_inplace_shapes failed");
+    }
+
+    return 0;
+}
+
+int test_fill_inplace_benchmark(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Benchmark: fill_ ===" << std::endl;
+
+    constexpr int64_t SIZE = 1024 * 1024 * 16;
+    constexpr int WARMUP = 10;
+    constexpr int ITERS = 100;
+
+    at::Tensor tensor = tf.rand({SIZE});
+    dm.synchronize();
+
+    BenchmarkRunner runner(WARMUP, ITERS);
+    auto stats = runner.run(
+        [&]() { my_ops::fill_(tensor, 1.0f); },
+        [&]() { dm.synchronize(); }
+    );
+
+    int64_t bytes = SIZE * sizeof(float);
+    double bandwidth = calculate_bandwidth_gbps(bytes, stats.mean);
+
+    std::cout << "Mean latency: " << stats.mean << " us" << std::endl;
+    std::cout << "Bandwidth:    " << bandwidth << " GB/s" << std::endl;
+
+    return 0;
+}
+
+int main() {
+    std::cout << "==========================================" << std::endl;
+    std::cout << "  Triton JIT Fill_ Operator Test Suite   " << std::endl;
+    std::cout << "==========================================" << std::endl;
+
+    DeviceManager dm;
+    if (dm.initialize() != 0) {
+        std::cerr << "Failed to initialize device" << std::endl;
+        return -1;
+    }
+
+    std::cout << "Backend: " << dm.get_backend_name() << std::endl;
+    TensorFactory tf(dm);
+
+    RUN_TEST(test_fill_inplace_basic(dm, tf));
+    RUN_TEST(test_fill_inplace_shapes(dm, tf));
+    RUN_TEST(test_fill_inplace_benchmark(dm, tf));
+
+    std::cout << "\n==========================================" << std::endl;
+    std::cout << "  All tests passed!" << std::endl;
+    std::cout << "==========================================" << std::endl;
+
     return 0;
 }

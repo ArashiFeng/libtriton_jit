@@ -3,68 +3,123 @@
 // ==============================================================================
 
 #include "bmm_op.h"
-#include "torch/torch.h"
+#include "test_framework.h"
+#include "benchmark_utils.h"
+
 #include <iostream>
 
-#if defined(BACKEND_NPU)
-    #include "acl/acl.h"
-#elif defined(BACKEND_MUSA)
-    #include "musa_runtime.h"
-    #include "pybind11/embed.h"
-#else
-    #include "c10/cuda/CUDAFunctions.h"
-#endif
+using namespace triton_jit::test;
+using namespace triton_jit::benchmark;
 
-namespace {
+int test_bmm_basic(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Test: bmm_basic ===" << std::endl;
 
-inline void device_synchronize() {
-#if defined(BACKEND_NPU)
-    aclrtSynchronizeDevice();
-#elif defined(BACKEND_MUSA)
-    musaDeviceSynchronize();
-#else
-    c10::cuda::device_synchronize();
-#endif
-}
-
-}  // anonymous namespace
-
-int main() {
     constexpr int64_t BATCH = 8;
     constexpr int64_t M = 64;
     constexpr int64_t K = 128;
     constexpr int64_t N = 64;
 
-#if defined(BACKEND_MUSA)
-    namespace py = pybind11;
-    py::scoped_interpreter guard{};
-    py::module_::import("torch_musa");
-    at::Device device(at::DeviceType::PrivateUse1, 0);
-#elif defined(BACKEND_NPU)
-    at::Device device(at::kPrivateUse1);
-#else
-    at::Device device(at::kCUDA);
-#endif
-
-    at::Tensor a = at::randn({BATCH, M, K}, at::TensorOptions().device(device));
-    at::Tensor b = at::randn({BATCH, K, N}, at::TensorOptions().device(device));
-
-    std::cout << "Testing bmm operator..." << std::endl;
-    std::cout << "Input shapes: A[" << BATCH << ", " << M << ", " << K << "]"
-              << " x B[" << BATCH << ", " << K << ", " << N << "]" << std::endl;
+    at::Tensor a = tf.rand({BATCH, M, K});
+    at::Tensor b = tf.rand({BATCH, K, N});
+    dm.synchronize();
 
     at::Tensor result = my_ops::bmm(a, b);
-    device_synchronize();
+    dm.synchronize();
 
-    std::cout << "Output shape: [" << result.size(0) << ", " 
-              << result.size(1) << ", " << result.size(2) << "]" << std::endl;
-
-#if !defined(BACKEND_NPU) && !defined(BACKEND_MUSA)
     at::Tensor expected = at::bmm(a, b);
-    bool match = at::allclose(result, expected, 1e-3, 1e-3);
-    std::cout << "Results match reference: " << (match ? "YES" : "NO") << std::endl;
-#endif
+    dm.synchronize();
 
-    std::cout << "BMM test completed!" << std::endl;
+    std::cout << "Output shape: " << result.sizes() << std::endl;
+
+    CorrectnessResult cr = CorrectnessChecker::compare(result, expected, 1e-3, 1e-3);
+    TestRunner::print_result(cr);
+
+    TEST_ASSERT(cr.passed, "bmm_basic correctness check failed");
+    return 0;
+}
+
+int test_bmm_shapes(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Test: bmm_shapes ===" << std::endl;
+
+    std::vector<std::tuple<int64_t, int64_t, int64_t, int64_t>> shapes = {
+        {1, 64, 64, 64},
+        {4, 128, 256, 128},
+        {16, 32, 64, 32},
+        {32, 64, 128, 64},
+    };
+
+    for (const auto& [B, M, K, N] : shapes) {
+        at::Tensor a = tf.rand({B, M, K});
+        at::Tensor b = tf.rand({B, K, N});
+        dm.synchronize();
+
+        at::Tensor result = my_ops::bmm(a, b);
+        dm.synchronize();
+
+        at::Tensor expected = at::bmm(a, b);
+        dm.synchronize();
+
+        CorrectnessResult cr = CorrectnessChecker::compare(result, expected, 1e-3, 1e-3);
+        std::cout << "Shape (" << B << ", " << M << ", " << K << ") x (" << B << ", " << K << ", " << N << "): "
+                  << (cr.passed ? "PASS" : "FAIL") << std::endl;
+
+        TEST_ASSERT(cr.passed, "bmm_shapes failed");
+    }
+
+    return 0;
+}
+
+int test_bmm_benchmark(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Benchmark: bmm ===" << std::endl;
+
+    constexpr int64_t BATCH = 32;
+    constexpr int64_t M = 512;
+    constexpr int64_t K = 512;
+    constexpr int64_t N = 512;
+    constexpr int WARMUP = 10;
+    constexpr int ITERS = 100;
+
+    at::Tensor a = tf.rand({BATCH, M, K});
+    at::Tensor b = tf.rand({BATCH, K, N});
+    dm.synchronize();
+
+    BenchmarkRunner runner(WARMUP, ITERS);
+    auto stats = runner.run(
+        [&]() { my_ops::bmm(a, b); },
+        [&]() { dm.synchronize(); }
+    );
+
+    int64_t flops = BATCH * 2 * M * N * K;
+    double tflops = calculate_tflops(flops, stats.mean);
+
+    std::cout << "Shape: (" << BATCH << ", " << M << ", " << K << ") x (" << BATCH << ", " << K << ", " << N << ")" << std::endl;
+    std::cout << "Mean latency: " << stats.mean << " us" << std::endl;
+    std::cout << "TFLOPS:       " << tflops << std::endl;
+
+    return 0;
+}
+
+int main() {
+    std::cout << "=======================================" << std::endl;
+    std::cout << "  Triton JIT BMM Operator Test Suite  " << std::endl;
+    std::cout << "=======================================" << std::endl;
+
+    DeviceManager dm;
+    if (dm.initialize() != 0) {
+        std::cerr << "Failed to initialize device" << std::endl;
+        return -1;
+    }
+
+    std::cout << "Backend: " << dm.get_backend_name() << std::endl;
+    TensorFactory tf(dm);
+
+    RUN_TEST(test_bmm_basic(dm, tf));
+    RUN_TEST(test_bmm_shapes(dm, tf));
+    RUN_TEST(test_bmm_benchmark(dm, tf));
+
+    std::cout << "\n=======================================" << std::endl;
+    std::cout << "  All tests passed!" << std::endl;
+    std::cout << "=======================================" << std::endl;
+
     return 0;
 }

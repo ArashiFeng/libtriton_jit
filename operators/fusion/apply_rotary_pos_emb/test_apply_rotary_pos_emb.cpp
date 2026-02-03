@@ -3,61 +3,123 @@
 // ==============================================================================
 
 #include "apply_rotary_pos_emb_op.h"
-#include "torch/torch.h"
+#include "test_framework.h"
+#include "benchmark_utils.h"
+
 #include <iostream>
 
-#if defined(BACKEND_NPU)
-    #include "acl/acl.h"
-#elif defined(BACKEND_MUSA)
-    #include "musa_runtime.h"
-    #include "pybind11/embed.h"
-#else
-    #include "c10/cuda/CUDAFunctions.h"
-#endif
+using namespace triton_jit::test;
+using namespace triton_jit::benchmark;
 
-namespace {
+int test_apply_rotary_pos_emb_basic(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Test: apply_rotary_pos_emb_basic ===" << std::endl;
 
-inline void device_synchronize() {
-#if defined(BACKEND_NPU)
-    aclrtSynchronizeDevice();
-#elif defined(BACKEND_MUSA)
-    musaDeviceSynchronize();
-#else
-    c10::cuda::device_synchronize();
-#endif
-}
-
-}  // anonymous namespace
-
-int main() {
     constexpr int64_t SEQ_LEN = 128;
     constexpr int64_t NUM_HEADS = 8;
     constexpr int64_t HEAD_DIM = 64;
 
-#if defined(BACKEND_MUSA)
-    namespace py = pybind11;
-    py::scoped_interpreter guard{};
-    py::module_::import("torch_musa");
-    at::Device device(at::DeviceType::PrivateUse1, 0);
-#elif defined(BACKEND_NPU)
-    at::Device device(at::kPrivateUse1);
-#else
-    at::Device device(at::kCUDA);
-#endif
-
-    at::Tensor q = at::randn({SEQ_LEN, NUM_HEADS, HEAD_DIM}, at::TensorOptions().device(device));
-    at::Tensor k = at::randn({SEQ_LEN, NUM_HEADS, HEAD_DIM}, at::TensorOptions().device(device));
-    at::Tensor cos = at::randn({SEQ_LEN, HEAD_DIM / 2}, at::TensorOptions().device(device));
-    at::Tensor sin = at::randn({SEQ_LEN, HEAD_DIM / 2}, at::TensorOptions().device(device));
-
-    std::cout << "Testing apply_rotary_pos_emb operator..." << std::endl;
-    std::cout << "Q/K shape: [" << SEQ_LEN << ", " << NUM_HEADS << ", " << HEAD_DIM << "]" << std::endl;
+    at::Tensor q = tf.rand({SEQ_LEN, NUM_HEADS, HEAD_DIM});
+    at::Tensor k = tf.rand({SEQ_LEN, NUM_HEADS, HEAD_DIM});
+    at::Tensor cos = tf.rand({SEQ_LEN, HEAD_DIM / 2});
+    at::Tensor sin = tf.rand({SEQ_LEN, HEAD_DIM / 2});
+    dm.synchronize();
 
     auto [q_out, k_out] = my_ops::apply_rotary_pos_emb(q, k, cos, sin, HEAD_DIM);
-    device_synchronize();
+    dm.synchronize();
 
-    std::cout << "Q output shape: [" << q_out.size(0) << ", " << q_out.size(1) << ", " << q_out.size(2) << "]" << std::endl;
-    std::cout << "K output shape: [" << k_out.size(0) << ", " << k_out.size(1) << ", " << k_out.size(2) << "]" << std::endl;
-    std::cout << "apply_rotary_pos_emb test completed!" << std::endl;
+    std::cout << "Q output shape: " << q_out.sizes() << std::endl;
+    std::cout << "K output shape: " << k_out.sizes() << std::endl;
+
+    TEST_ASSERT(q_out.sizes() == q.sizes(), "Q output shape should match input");
+    TEST_ASSERT(k_out.sizes() == k.sizes(), "K output shape should match input");
+
+    std::cout << "[PASS] apply_rotary_pos_emb_basic" << std::endl;
+    return 0;
+}
+
+int test_apply_rotary_pos_emb_shapes(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Test: apply_rotary_pos_emb_shapes ===" << std::endl;
+
+    std::vector<std::tuple<int64_t, int64_t, int64_t>> shapes = {
+        {64, 4, 32},
+        {256, 8, 64},
+        {512, 16, 128},
+    };
+
+    for (const auto& [S, H, D] : shapes) {
+        at::Tensor q = tf.rand({S, H, D});
+        at::Tensor k = tf.rand({S, H, D});
+        at::Tensor cos = tf.rand({S, D / 2});
+        at::Tensor sin = tf.rand({S, D / 2});
+        dm.synchronize();
+
+        auto [q_out, k_out] = my_ops::apply_rotary_pos_emb(q, k, cos, sin, D);
+        dm.synchronize();
+
+        bool shape_match = (q_out.sizes() == q.sizes() && k_out.sizes() == k.sizes());
+        std::cout << "Shape (" << S << ", " << H << ", " << D << "): "
+                  << (shape_match ? "PASS" : "FAIL") << std::endl;
+
+        TEST_ASSERT(shape_match, "apply_rotary_pos_emb_shapes failed");
+    }
+
+    return 0;
+}
+
+int test_apply_rotary_pos_emb_benchmark(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Benchmark: apply_rotary_pos_emb ===" << std::endl;
+
+    constexpr int64_t SEQ_LEN = 2048;
+    constexpr int64_t NUM_HEADS = 32;
+    constexpr int64_t HEAD_DIM = 128;
+    constexpr int WARMUP = 10;
+    constexpr int ITERS = 100;
+
+    at::Tensor q = tf.rand({SEQ_LEN, NUM_HEADS, HEAD_DIM});
+    at::Tensor k = tf.rand({SEQ_LEN, NUM_HEADS, HEAD_DIM});
+    at::Tensor cos = tf.rand({SEQ_LEN, HEAD_DIM / 2});
+    at::Tensor sin = tf.rand({SEQ_LEN, HEAD_DIM / 2});
+    dm.synchronize();
+
+    BenchmarkRunner runner(WARMUP, ITERS);
+    auto stats = runner.run(
+        [&]() { my_ops::apply_rotary_pos_emb(q, k, cos, sin, HEAD_DIM); },
+        [&]() { dm.synchronize(); }
+    );
+
+    // Read q + k + cos + sin, write q_out + k_out
+    int64_t bytes = SEQ_LEN * NUM_HEADS * HEAD_DIM * sizeof(float) * 4
+                  + SEQ_LEN * (HEAD_DIM / 2) * sizeof(float) * 2;
+    double bandwidth = calculate_bandwidth_gbps(bytes, stats.mean);
+
+    std::cout << "Shape: (" << SEQ_LEN << ", " << NUM_HEADS << ", " << HEAD_DIM << ")" << std::endl;
+    std::cout << "Mean latency: " << stats.mean << " us" << std::endl;
+    std::cout << "Bandwidth:    " << bandwidth << " GB/s" << std::endl;
+
+    return 0;
+}
+
+int main() {
+    std::cout << "======================================================" << std::endl;
+    std::cout << "  Triton JIT Apply Rotary Pos Emb Operator Test Suite " << std::endl;
+    std::cout << "======================================================" << std::endl;
+
+    DeviceManager dm;
+    if (dm.initialize() != 0) {
+        std::cerr << "Failed to initialize device" << std::endl;
+        return -1;
+    }
+
+    std::cout << "Backend: " << dm.get_backend_name() << std::endl;
+    TensorFactory tf(dm);
+
+    RUN_TEST(test_apply_rotary_pos_emb_basic(dm, tf));
+    RUN_TEST(test_apply_rotary_pos_emb_shapes(dm, tf));
+    RUN_TEST(test_apply_rotary_pos_emb_benchmark(dm, tf));
+
+    std::cout << "\n======================================================" << std::endl;
+    std::cout << "  All tests passed!" << std::endl;
+    std::cout << "======================================================" << std::endl;
+
     return 0;
 }

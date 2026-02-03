@@ -3,62 +3,133 @@
 // ==============================================================================
 
 #include "cat_op.h"
-#include "torch/torch.h"
+#include "test_framework.h"
+#include "benchmark_utils.h"
+
 #include <iostream>
 
-#if defined(BACKEND_NPU)
-    #include "acl/acl.h"
-#elif defined(BACKEND_MUSA)
-    #include "musa_runtime.h"
-    #include "pybind11/embed.h"
-#else
-    #include "c10/cuda/CUDAFunctions.h"
-#endif
+using namespace triton_jit::test;
+using namespace triton_jit::benchmark;
 
-namespace {
+int test_cat_basic(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Test: cat_basic ===" << std::endl;
 
-inline void device_synchronize() {
-#if defined(BACKEND_NPU)
-    aclrtSynchronizeDevice();
-#elif defined(BACKEND_MUSA)
-    musaDeviceSynchronize();
-#else
-    c10::cuda::device_synchronize();
-#endif
-}
-
-}  // anonymous namespace
-
-int main() {
-#if defined(BACKEND_MUSA)
-    namespace py = pybind11;
-    py::scoped_interpreter guard{};
-    py::module_::import("torch_musa");
-    at::Device device(at::DeviceType::PrivateUse1, 0);
-#elif defined(BACKEND_NPU)
-    at::Device device(at::kPrivateUse1);
-#else
-    at::Device device(at::kCUDA);
-#endif
-
-    at::Tensor a = at::randn({16, 32}, at::TensorOptions().device(device));
-    at::Tensor b = at::randn({16, 64}, at::TensorOptions().device(device));
-
-    std::cout << "Testing cat operator..." << std::endl;
-    std::cout << "Input A shape: [16, 32]" << std::endl;
-    std::cout << "Input B shape: [16, 64]" << std::endl;
+    at::Tensor a = tf.rand({16, 32});
+    at::Tensor b = tf.rand({16, 64});
+    dm.synchronize();
 
     at::Tensor result = my_ops::cat({a, b}, 1);
-    device_synchronize();
+    dm.synchronize();
 
-    std::cout << "Output shape: [" << result.size(0) << ", " << result.size(1) << "]" << std::endl;
+    // Verify output shape
+    std::cout << "Output shape: " << result.sizes() << std::endl;
+    TEST_ASSERT(result.size(0) == 16 && result.size(1) == 96, "Output shape should be [16, 96]");
 
-#if !defined(BACKEND_NPU) && !defined(BACKEND_MUSA)
+    // Reference
     at::Tensor expected = at::cat({a, b}, 1);
-    bool match = at::allclose(result, expected);
-    std::cout << "Results match reference: " << (match ? "YES" : "NO") << std::endl;
-#endif
+    dm.synchronize();
 
-    std::cout << "Cat test completed!" << std::endl;
+    CorrectnessResult cr = CorrectnessChecker::compare(result, expected, 1e-6, 1e-6);
+    TestRunner::print_result(cr);
+
+    TEST_ASSERT(cr.passed, "cat_basic correctness check failed");
+    return 0;
+}
+
+int test_cat_dim0(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Test: cat_dim0 ===" << std::endl;
+
+    at::Tensor a = tf.rand({8, 64});
+    at::Tensor b = tf.rand({16, 64});
+    at::Tensor c = tf.rand({4, 64});
+    dm.synchronize();
+
+    at::Tensor result = my_ops::cat({a, b, c}, 0);
+    dm.synchronize();
+
+    std::cout << "Output shape: " << result.sizes() << std::endl;
+    TEST_ASSERT(result.size(0) == 28 && result.size(1) == 64, "Output shape should be [28, 64]");
+
+    at::Tensor expected = at::cat({a, b, c}, 0);
+    dm.synchronize();
+
+    CorrectnessResult cr = CorrectnessChecker::compare(result, expected, 1e-6, 1e-6);
+    TestRunner::print_result(cr);
+
+    TEST_ASSERT(cr.passed, "cat_dim0 correctness check failed");
+    return 0;
+}
+
+int test_cat_3d(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Test: cat_3d ===" << std::endl;
+
+    at::Tensor a = tf.rand({4, 8, 16});
+    at::Tensor b = tf.rand({4, 8, 32});
+    dm.synchronize();
+
+    at::Tensor result = my_ops::cat({a, b}, 2);
+    dm.synchronize();
+
+    std::cout << "Output shape: " << result.sizes() << std::endl;
+    TEST_ASSERT(result.size(2) == 48, "Last dim should be concatenated");
+
+    at::Tensor expected = at::cat({a, b}, 2);
+    dm.synchronize();
+
+    CorrectnessResult cr = CorrectnessChecker::compare(result, expected, 1e-6, 1e-6);
+    TestRunner::print_result(cr);
+
+    TEST_ASSERT(cr.passed, "cat_3d correctness check failed");
+    return 0;
+}
+
+int test_cat_benchmark(DeviceManager& dm, TensorFactory& tf) {
+    std::cout << "\n=== Benchmark: cat ===" << std::endl;
+
+    constexpr int WARMUP = 10;
+    constexpr int ITERS = 100;
+
+    at::Tensor a = tf.rand({1024, 512});
+    at::Tensor b = tf.rand({1024, 512});
+    dm.synchronize();
+
+    BenchmarkRunner runner(WARMUP, ITERS);
+    auto stats = runner.run(
+        [&]() { my_ops::cat({a, b}, 1); },
+        [&]() { dm.synchronize(); }
+    );
+
+    int64_t bytes = 1024 * 1024 * sizeof(float) * 2;  // read both + write result
+    double bandwidth = calculate_bandwidth_gbps(bytes, stats.mean);
+
+    std::cout << "Mean latency: " << stats.mean << " us" << std::endl;
+    std::cout << "Bandwidth:    " << bandwidth << " GB/s" << std::endl;
+
+    return 0;
+}
+
+int main() {
+    std::cout << "=======================================" << std::endl;
+    std::cout << "  Triton JIT Cat Operator Test Suite  " << std::endl;
+    std::cout << "=======================================" << std::endl;
+
+    DeviceManager dm;
+    if (dm.initialize() != 0) {
+        std::cerr << "Failed to initialize device" << std::endl;
+        return -1;
+    }
+
+    std::cout << "Backend: " << dm.get_backend_name() << std::endl;
+    TensorFactory tf(dm);
+
+    RUN_TEST(test_cat_basic(dm, tf));
+    RUN_TEST(test_cat_dim0(dm, tf));
+    RUN_TEST(test_cat_3d(dm, tf));
+    RUN_TEST(test_cat_benchmark(dm, tf));
+
+    std::cout << "\n=======================================" << std::endl;
+    std::cout << "  All tests passed!" << std::endl;
+    std::cout << "=======================================" << std::endl;
+
     return 0;
 }
