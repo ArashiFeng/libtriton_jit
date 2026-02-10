@@ -37,6 +37,16 @@ message(STATUS "Found AscendCL: ${ASCENDCL_LIBRARY}")
 message(STATUS "Found Ascend Runtime: ${ASCEND_RUNTIME_LIBRARY}")
 
 # ------------------------------- Ascend Include Directories -------------------
+# Find CANN installation for pkg_inc headers (contains rt.h and other runtime headers)
+set(CANN_HOME $ENV{CANN_HOME})
+if(NOT CANN_HOME)
+    # Try to find CANN installation automatically
+    file(GLOB CANN_CANDIDATES "/usr/local/Ascend/cann-*")
+    if(CANN_CANDIDATES)
+        list(GET CANN_CANDIDATES 0 CANN_HOME)
+    endif()
+endif()
+
 set(ASCEND_INCLUDE_DIRS
     "${ASCEND_TOOLKIT_HOME}/include"
     "${ASCEND_TOOLKIT_HOME}/include/aclnn"
@@ -46,6 +56,17 @@ set(ASCEND_INCLUDE_DIRS
     "${ASCEND_TOOLKIT_HOME}/${ASCEND_ARCH_DIR}/include/experiment"
     "${ASCEND_TOOLKIT_HOME}/${ASCEND_ARCH_DIR}/include/experiment/msprof"
 )
+
+# Add CANN pkg_inc path for rt.h and other runtime headers
+if(CANN_HOME AND EXISTS "${CANN_HOME}/${ASCEND_ARCH_DIR}/pkg_inc")
+    list(APPEND ASCEND_INCLUDE_DIRS "${CANN_HOME}/${ASCEND_ARCH_DIR}/pkg_inc")
+    message(STATUS "Found CANN pkg_inc: ${CANN_HOME}/${ASCEND_ARCH_DIR}/pkg_inc")
+    # Also add runtime/runtime for config.h and other deps
+    if(EXISTS "${CANN_HOME}/${ASCEND_ARCH_DIR}/pkg_inc/runtime/runtime")
+        list(APPEND ASCEND_INCLUDE_DIRS "${CANN_HOME}/${ASCEND_ARCH_DIR}/pkg_inc/runtime/runtime")
+        message(STATUS "Found CANN runtime headers: ${CANN_HOME}/${ASCEND_ARCH_DIR}/pkg_inc/runtime/runtime")
+    endif()
+endif()
 
 # ------------------------------- Create Imported Targets ----------------------
 add_library(Ascend::ascendcl SHARED IMPORTED)

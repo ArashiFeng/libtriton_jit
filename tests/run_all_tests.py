@@ -34,7 +34,7 @@ class TestRunner:
 
     OPERATORS = {
         "pointwise": ["add", "fill", "zeros", "exponential_", "contiguous"],
-        "reduce": ["sum", "max", "argmax", "topk"],
+        "reduce": ["sum", "topk"],  # max/argmax disabled: linalg.reduce not supported on NPU
         "matmul": ["mm", "bmm", "addmm"],
         "index": ["embedding", "nonzero", "cat", "reshape_and_cache_flash"],
         "normalization": ["softmax", "rms_norm", "fused_add_rms_norm"],

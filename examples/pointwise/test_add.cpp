@@ -279,24 +279,30 @@ int main() {
     // ======================== Warm-up & Compute ==============================
     std::cout << "\n=== Executing Computation ===" << std::endl;
 
+#if defined(BACKEND_MUSA)
     // Clear any previous MUSA errors
     musaGetLastError();
+#endif
 
     at::Tensor result1 = my_ops::add_tensor(a, b);
 
+#if defined(BACKEND_MUSA)
     // Check for MUSA errors after kernel execution
     musaError_t exec_err = musaGetLastError();
     if (exec_err != musaSuccess) {
         std::cerr << "[ERROR] MUSA error after kernel execution: " << musaGetErrorString(exec_err) << std::endl;
     }
+#endif
 
     device_synchronize();
 
+#if defined(BACKEND_MUSA)
     // Check for sync errors
     musaError_t sync_err = musaGetLastError();
     if (sync_err != musaSuccess) {
         std::cerr << "[ERROR] MUSA error after synchronize: " << musaGetErrorString(sync_err) << std::endl;
     }
+#endif
 
     // ======================== Result Verification ============================
     std::cout << "\n=== Results ===" << std::endl;

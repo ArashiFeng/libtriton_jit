@@ -75,13 +75,22 @@ at::Tensor mm(const at::Tensor& a, const at::Tensor& b) {
     const TritonJITFunction& f = TritonJITFunction::get_instance(
         std::string("mm.py"), "matmul_kernel");
 
-    // Reduced block sizes to fit in shared memory (max ~100KB)
+#if defined(BACKEND_NPU)
+    constexpr int64_t BLOCK_M = 32;
+    constexpr int64_t BLOCK_N = 32;
+    constexpr int64_t BLOCK_K = 32;
+    constexpr int64_t GROUP_M = 4;
+    constexpr int num_warps = 1;
+    constexpr int num_stages = 1;
+#else
+    // CUDA/MUSA: Optimized block sizes
     constexpr int64_t BLOCK_M = 64;
     constexpr int64_t BLOCK_N = 64;
     constexpr int64_t BLOCK_K = 32;
     constexpr int64_t GROUP_M = 8;
     constexpr int num_warps = 4;
     constexpr int num_stages = 2;
+#endif
 
     int64_t grid_m = (M + BLOCK_M - 1) / BLOCK_M;
     int64_t grid_n = (N + BLOCK_N - 1) / BLOCK_N;

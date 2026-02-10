@@ -88,20 +88,29 @@ at::Tensor softmax(const at::Tensor& input, int64_t dim) {
     at::Tensor output = at::empty({n_rows, n_cols}, input.options());
 #endif
 
+    // softmax_kernel_inner(output_ptr, input_ptr, M, N, input_row_stride, output_row_stride, TILE_N, ONE_TILE_PER_CTA)
     const TritonJITFunction& f = TritonJITFunction::get_instance(
-        std::string("softmax.py"), "softmax_kernel");
+        std::string("softmax.py"), "softmax_kernel_inner");
 
-    int64_t BLOCK_SIZE = next_power_of_2(n_cols);
+#if defined(BACKEND_NPU)
+    int64_t TILE_N = std::min(next_power_of_2(n_cols), int64_t(2048));
+    constexpr int num_warps = 1;
+    constexpr int num_stages = 1;
+#else
+    int64_t TILE_N = std::min(next_power_of_2(n_cols), int64_t(4096));
     constexpr int num_warps = 4;
     constexpr int num_stages = 1;
+#endif
+    int64_t ONE_TILE_PER_CTA = (TILE_N >= n_cols) ? 1 : 0;
 
     c10::DeviceGuard guard(input.device());
     RawStream stream = get_device_stream(x_flat);
 
     f(stream, n_rows, 1, 1, num_warps, num_stages,
-      x_flat, output,
+      output, x_flat,  // output first, then input
+      n_rows, n_cols,
       x_flat.stride(0), output.stride(0),
-      n_cols, BLOCK_SIZE);
+      TILE_N, ONE_TILE_PER_CTA);
 
     // Reshape and inverse permute
     output = output.view(x_permuted.sizes());

@@ -81,11 +81,21 @@ at::Tensor addmm(const at::Tensor& input, const at::Tensor& a, const at::Tensor&
     const TritonJITFunction& f = TritonJITFunction::get_instance(
         std::string("addmm.py"), "addmm_kernel");
 
+#if defined(BACKEND_NPU)
+    // NPU: Smaller blocks to fit in Unified Buffer (~192KB available)
+    constexpr int64_t BLOCK_M = 32;
+    constexpr int64_t BLOCK_N = 32;
+    constexpr int64_t BLOCK_K = 32;
+    constexpr int num_warps = 1;
+    constexpr int num_stages = 1;
+#else
+    // CUDA/MUSA: Larger blocks for better performance
     constexpr int64_t BLOCK_M = 64;
     constexpr int64_t BLOCK_N = 64;
     constexpr int64_t BLOCK_K = 32;
     constexpr int num_warps = 4;
     constexpr int num_stages = 2;
+#endif
 
     int64_t num_m_tiles = (M + BLOCK_M - 1) / BLOCK_M;
     int64_t num_n_tiles = (N + BLOCK_N - 1) / BLOCK_N;

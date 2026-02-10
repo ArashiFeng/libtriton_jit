@@ -41,7 +41,8 @@ at::Tensor add_tensor(const at::Tensor& a_, const at::Tensor& b_) {
                          num_warps,
                          num_stages,
                          signature,
-                         raw_args_list.data());
+                         raw_args_list.data(),
+                         raw_args_list.size());
 
   return out;
 }

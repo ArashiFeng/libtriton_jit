@@ -23,7 +23,11 @@ int test_mm_basic(DeviceManager& dm, TensorFactory& tf) {
     at::Tensor result = my_ops::mm(a, b);
     dm.synchronize();
 
-    at::Tensor expected = at::mm(a, b);
+    #if defined(BACKEND_NPU)
+        at::Tensor expected = at::mm(a.cpu(), b.cpu());
+    #else
+        at::Tensor expected = at::mm(a, b);
+    #endif
     dm.synchronize();
 
     CorrectnessResult cr = CorrectnessChecker::compare(result, expected, 1e-3, 1e-3);
@@ -51,7 +55,11 @@ int test_mm_shapes(DeviceManager& dm, TensorFactory& tf) {
         at::Tensor result = my_ops::mm(a, b);
         dm.synchronize();
 
-        at::Tensor expected = at::mm(a, b);
+        #if defined(BACKEND_NPU)
+            at::Tensor expected = at::mm(a.cpu(), b.cpu());
+        #else
+            at::Tensor expected = at::mm(a, b);
+        #endif
         dm.synchronize();
 
         CorrectnessResult cr = CorrectnessChecker::compare(result, expected, 1e-3, 1e-3);

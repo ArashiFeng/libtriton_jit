@@ -1,111 +1,130 @@
 # ==============================================================================
 # fused_add_rms_norm.py - Fused Add + RMS Normalization Triton Kernel
+# Based on FlagGems Ascend implementation (NPU-compatible)
 # ==============================================================================
 
 import torch
 import triton
 from triton import language as tl
+import math
 
 
 @triton.jit
 def fused_add_rms_norm_kernel(
-    input_ptr,
-    residual_ptr,
-    weight_ptr,
-    output_ptr,
-    residual_out_ptr,
-    input_row_stride,
-    output_row_stride,
-    n_cols,
-    eps,
+    X,  # pointer to the input
+    R,  # pointer to the residual
+    W,  # pointer to the weight
+    x_stride_r,  # how much to increase the pointer when moving by 1 row
+    x_stride_c,  # how much to increase the pointer when moving by 1 col
+    r_stride_r,  # how much to increase the pointer when moving by 1 row
+    r_stride_c,  # how much to increase the pointer when moving by 1 col
+    N,  # number of columns in X
+    eps,  # epsilon to avoid division by zero
     BLOCK_SIZE: tl.constexpr,
 ):
-    """Fused add + RMS normalization kernel.
-    
-    output = rms_norm(input + residual)
-    residual_out = input + residual
+    """Fused add + RMS normalization kernel (NPU-compatible).
+
+    Performs in-place:
+    - residual = x + residual
+    - x = rms_norm(residual) * weight
+
+    Uses iterative approach compatible with NPU.
     """
-    row_idx = tl.program_id(0)
-    col_offsets = tl.arange(0, BLOCK_SIZE)
-    mask = col_offsets < n_cols
-    
-    # Load input and residual
-    input_row_ptr = input_ptr + row_idx * input_row_stride
-    residual_row_ptr = residual_ptr + row_idx * input_row_stride
-    
-    x = tl.load(input_row_ptr + col_offsets, mask=mask, other=0.0)
-    res = tl.load(residual_row_ptr + col_offsets, mask=mask, other=0.0)
-    
-    # Fused add
-    x_add = x + res
-    
-    # Store residual output
-    residual_out_row_ptr = residual_out_ptr + row_idx * output_row_stride
-    tl.store(residual_out_row_ptr + col_offsets, x_add, mask=mask)
-    
-    # Compute RMS
-    x_sq = x_add * x_add
-    mean_sq = tl.sum(x_sq, axis=0) / n_cols
-    rms = tl.sqrt(mean_sq + eps)
-    
-    # Normalize
-    x_normed = x_add / rms
-    
-    # Load weight and apply
-    w = tl.load(weight_ptr + col_offsets, mask=mask, other=1.0)
-    output = x_normed * w
-    
-    # Store normalized output
-    output_row_ptr = output_ptr + row_idx * output_row_stride
-    tl.store(output_row_ptr + col_offsets, output, mask=mask)
+    pid = tl.program_id(0)
+    # Compute row base offset (avoid in-place pointer arithmetic for NPU compatibility)
+    x_row_offset = pid * x_stride_r
+    r_row_offset = pid * r_stride_r
+
+    # First pass: compute variance
+    _var_base = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
+
+    for off in range(0, N, BLOCK_SIZE):
+        cols = off + tl.arange(0, BLOCK_SIZE)
+        mask = cols < N
+        x = tl.load(X + x_row_offset + cols, mask, other=0.0).to(tl.float32)
+        r = tl.load(R + r_row_offset + cols, mask, other=0.0).to(tl.float32)
+        x += r
+        _var_base += x * x / N
+
+    var = tl.sum(_var_base)
+    rrms = 1 / tl.sqrt(var + eps)
+
+    # Second pass: apply normalization and write outputs
+    for off in range(0, N, BLOCK_SIZE):
+        cols = off + tl.arange(0, BLOCK_SIZE)
+        mask = cols < N
+        x = tl.load(X + x_row_offset + cols, mask, other=0.0).to(tl.float32)
+        r = tl.load(R + r_row_offset + cols, mask, other=0.0).to(tl.float32)
+        x += r
+        w = tl.load(W + cols, mask, other=0.0)
+        y = (x * rrms).to(X.dtype.element_ty) * w
+
+        # Write back to residual and input
+        tl.store(R + r_row_offset + cols * r_stride_c, x.to(R.dtype.element_ty), mask=mask)
+        tl.store(X + x_row_offset + cols * x_stride_c, y, mask=mask)
 
 
-def fused_add_rms_norm(x: torch.Tensor, residual: torch.Tensor, 
-                       weight: torch.Tensor, eps: float = 1e-6):
-    """Fused Add + RMS Normalization.
-    
+def fused_add_rms_norm(x: torch.Tensor, residual: torch.Tensor,
+                       weight: torch.Tensor, eps: float = 1e-5):
+    """Fused residual addition and RMS normalization (NPU-compatible).
+
+    This function performs fused residual addition and RMS normalization **in-place**.
+    Both `x` and `residual` tensors will be modified.
+
+    Args:
+        x: Input tensor (will be overwritten with normalized output)
+        residual: Residual tensor (will be overwritten with x + residual)
+        weight: Weight tensor for scaling
+        eps: Small constant for numerical stability
+
     Returns:
-        output: rms_norm(x + residual)
-        residual_out: x + residual
+        Tuple of (normalized_output, updated_residual) - same tensors as input but modified
     """
     assert x.shape == residual.shape, "Input and residual must have same shape"
     assert x.size(-1) == weight.size(0), "Hidden dim must match weight size"
-    
-    orig_shape = x.shape
-    x_flat = x.view(-1, x.size(-1)).contiguous()
-    res_flat = residual.view(-1, residual.size(-1)).contiguous()
-    n_rows, n_cols = x_flat.shape
-    
-    output = torch.empty_like(x_flat)
-    residual_out = torch.empty_like(x_flat)
-    
-    BLOCK_SIZE = triton.next_power_of_2(n_cols)
-    
-    grid = (n_rows,)
-    with torch.cuda.device(x.device):
-        fused_add_rms_norm_kernel[grid](
-            x_flat, res_flat, weight, output, residual_out,
-            x_flat.stride(0), output.stride(0),
-            n_cols, eps,
-            BLOCK_SIZE=BLOCK_SIZE,
-            num_warps=4,
+
+    # Get normalized shape dimensions
+    normalized_shape = [x.size(-1)]
+    dim = x.ndim - len(normalized_shape)
+    M = min(math.prod(x.shape[:dim]) if dim > 0 else 1, 65535)
+    N = math.prod(normalized_shape)
+
+    BLOCK_SIZE = min(triton.next_power_of_2(N), 8192)
+
+    x = x.contiguous()
+    residual = residual.contiguous()
+    weight = weight.contiguous()
+
+    try:
+        from torch.cuda import device as cuda_device
+        with cuda_device(x.device):
+            fused_add_rms_norm_kernel[M,](
+                x, residual, weight, N, 1, N, 1, N, eps, BLOCK_SIZE
+            )
+    except:
+        fused_add_rms_norm_kernel[M,](
+            x, residual, weight, N, 1, N, 1, N, eps, BLOCK_SIZE
         )
-    
-    return output.view(orig_shape), residual_out.view(orig_shape)
+
+    return x, residual
 
 
 if __name__ == "__main__":
     x = torch.randn(16, 1024, device="cuda")
     residual = torch.randn(16, 1024, device="cuda")
     weight = torch.ones(1024, device="cuda")
-    
+
+    # Make copies for reference computation
+    x_orig = x.clone()
+    res_orig = residual.clone()
+
     output, res_out = fused_add_rms_norm(x, residual, weight)
-    
+
     # Reference implementation
-    x_add = x + residual
-    rms = torch.sqrt(x_add.pow(2).mean(-1, keepdim=True) + 1e-6)
+    x_add = x_orig + res_orig
+    rms = torch.sqrt(x_add.pow(2).mean(-1, keepdim=True) + 1e-5)
     expected = (x_add / rms) * weight
-    
+
     torch.cuda.synchronize()
     print(f"Output max diff: {(output - expected).abs().max().item()}")
     print(f"Residual max diff: {(res_out - x_add).abs().max().item()}")

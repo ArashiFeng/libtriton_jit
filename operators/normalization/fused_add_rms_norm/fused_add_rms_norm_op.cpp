@@ -52,7 +52,7 @@ using namespace triton_jit;
 std::tuple<at::Tensor, at::Tensor> fused_add_rms_norm(
     const at::Tensor& input, const at::Tensor& residual,
     const at::Tensor& weight, double eps) {
-    
+
     TORCH_CHECK(input.sizes() == residual.sizes(), "Input and residual must have same shape");
     TORCH_CHECK(input.size(-1) == weight.size(0), "Hidden dim must match weight size");
 
@@ -60,23 +60,9 @@ std::tuple<at::Tensor, at::Tensor> fused_add_rms_norm(
     int64_t hidden_size = input.size(-1);
     int64_t n_rows = input.numel() / hidden_size;
 
-    at::Tensor x_flat = input.view({n_rows, hidden_size}).contiguous();
-    at::Tensor res_flat = residual.view({n_rows, hidden_size}).contiguous();
-
-#if defined(BACKEND_MUSA)
-    void* out_ptr = nullptr;
-    void* res_out_ptr = nullptr;
-    size_t bytes = n_rows * hidden_size * at::elementSize(input.scalar_type());
-    musaMalloc(&out_ptr, bytes);
-    musaMalloc(&res_out_ptr, bytes);
-    auto opts = at::TensorOptions().dtype(input.scalar_type()).device(input.device());
-    auto deleter = [](void* ptr) { musaFree(ptr); };
-    at::Tensor output = at::from_blob(out_ptr, {n_rows, hidden_size}, deleter, opts);
-    at::Tensor residual_out = at::from_blob(res_out_ptr, {n_rows, hidden_size}, deleter, opts);
-#else
-    at::Tensor output = at::empty_like(x_flat);
-    at::Tensor residual_out = at::empty_like(x_flat);
-#endif
+    // The kernel operates in-place, so we need mutable copies
+    at::Tensor x_flat = input.view({n_rows, hidden_size}).contiguous().clone();
+    at::Tensor res_flat = residual.view({n_rows, hidden_size}).contiguous().clone();
 
     const TritonJITFunction& f = TritonJITFunction::get_instance(
         std::string("fused_add_rms_norm.py"), "fused_add_rms_norm_kernel");
@@ -84,19 +70,36 @@ std::tuple<at::Tensor, at::Tensor> fused_add_rms_norm(
     int64_t BLOCK_SIZE = 1;
     while (BLOCK_SIZE < hidden_size) BLOCK_SIZE *= 2;
 
+#if defined(BACKEND_NPU)
+    // NPU UB is ~192KB, limit BLOCK_SIZE to avoid overflow
+    // With fp32: 1024 elements * 4 bytes * 3 arrays (x, r, w) * 2 passes ≈ 24KB safe margin
+    constexpr int64_t NPU_MAX_BLOCK_SIZE = 1024;
+    BLOCK_SIZE = std::min(BLOCK_SIZE, NPU_MAX_BLOCK_SIZE);
+    constexpr int num_warps = 1;
+#else
     constexpr int num_warps = 4;
+#endif
     constexpr int num_stages = 1;
 
     c10::DeviceGuard guard(input.device());
     RawStream stream = get_device_stream(input);
 
+    // Kernel signature:
+    // fused_add_rms_norm_kernel(X, R, W, x_stride_r, x_stride_c, r_stride_r, r_stride_c, N, eps, BLOCK_SIZE)
+    // The kernel modifies X and R in-place
     f(stream, n_rows, 1, 1, num_warps, num_stages,
-      x_flat, res_flat, weight, output, residual_out,
-      x_flat.stride(0), output.stride(0),
-      hidden_size, static_cast<float>(eps),
-      BLOCK_SIZE);
+      x_flat,                        // X: input (modified in-place)
+      res_flat,                      // R: residual (modified in-place)
+      weight,                        // W: weight
+      x_flat.stride(0),              // x_stride_r
+      x_flat.stride(1),              // x_stride_c
+      res_flat.stride(0),            // r_stride_r
+      res_flat.stride(1),            // r_stride_c
+      hidden_size,                   // N
+      static_cast<float>(eps),       // eps
+      BLOCK_SIZE);                   // BLOCK_SIZE (constexpr)
 
-    return std::make_tuple(output.view(orig_shape), residual_out.view(orig_shape));
+    return std::make_tuple(x_flat.view(orig_shape), res_flat.view(orig_shape));
 }
 
 TORCH_LIBRARY(fused_add_rms_norm_ops, m) {

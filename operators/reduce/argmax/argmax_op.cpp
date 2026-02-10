@@ -80,19 +80,20 @@ at::Tensor argmax(const at::Tensor& self, int64_t dim, bool keepdim) {
 #endif
 
     const TritonJITFunction& f = TritonJITFunction::get_instance(
-        std::string("argmax.py"), "argmax_kernel");
+        std::string("argmax.py"), "argmax_dim_kernel");
 
     constexpr int64_t BLOCK_M = 4;
     constexpr int64_t BLOCK_N = 512;
     constexpr int num_warps = 8;
     constexpr int num_stages = 1;
+    constexpr int64_t K = 1;  // After permute, reduce dim is last, so K=1
     const unsigned int num_blocks = (M + BLOCK_M - 1) / BLOCK_M;
 
     c10::DeviceGuard guard(self.device());
     RawStream stream = get_device_stream(permuted);
 
     f(stream, num_blocks, 1, 1, num_warps, num_stages,
-      permuted.view({M, N}), out, M, N, BLOCK_M, BLOCK_N);
+      permuted.view({M, N}), out, M, N, K, BLOCK_M, BLOCK_N);
 
     // Reshape output - out_shape is already in correct order
     if (!out_shape.empty()) {

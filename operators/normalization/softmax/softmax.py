@@ -1,87 +1,195 @@
+# ==============================================================================
+# softmax.py - Softmax Triton Kernel (NPU-compatible)
+# Based on FlagGems Ascend implementation with iterative reduction
+# ==============================================================================
+
 import torch
 import triton
 from triton import language as tl
 
 
 @triton.jit
-def softmax_kernel(
-    input_ptr,
+def softmax_kernel_inner(
     output_ptr,
+    input_ptr,
+    M,
+    N,
     input_row_stride,
     output_row_stride,
-    n_cols,
-    BLOCK_SIZE: tl.constexpr,
+    TILE_N: tl.constexpr,
+    ONE_TILE_PER_CTA: tl.constexpr,
 ):
-    """Online softmax kernel - numerically stable."""
-    row_idx = tl.program_id(0)
-    row_start_ptr = input_ptr + row_idx * input_row_stride
-    col_offsets = tl.arange(0, BLOCK_SIZE)
-    input_ptrs = row_start_ptr + col_offsets
+    """Softmax kernel for innermost dimension (K=1 case)."""
+    pid_m = tl.program_id(0)
 
-    # Load row with masking
-    mask = col_offsets < n_cols
-    row = tl.load(input_ptrs, mask=mask, other=-float('inf'))
+    input_ptr += pid_m * input_row_stride
+    output_ptr += pid_m * output_row_stride
 
-    # Compute max for numerical stability
-    row_max = tl.max(row, axis=0)
+    if ONE_TILE_PER_CTA:
+        n_offsets = tl.arange(0, TILE_N)
+        mask = n_offsets < N
+        inp = tl.load(input_ptr + n_offsets, mask=mask, other=float("-inf"))
+        m = tl.max(inp, 0)
+        e = tl.exp(inp - m)
+        z = tl.sum(e, 0)
+        out = e / z
+        tl.store(output_ptr + n_offsets, out, mask=mask)
+    else:
+        # Multi-pass for large N
+        m = tl.full([TILE_N], value=float("-inf"), dtype=tl.float32)
+        z = tl.full([TILE_N], value=0.0, dtype=tl.float32)
 
-    # Subtract max and exponentiate
-    numerator = tl.exp(row - row_max)
+        # First pass: compute max and sum(exp) using online algorithm
+        for start_n in range(0, N, TILE_N):
+            n_offsets = start_n + tl.arange(0, TILE_N)
+            mask = n_offsets < N
+            inp = tl.load(input_ptr + n_offsets, mask=mask, other=float("-inf"))
+            m_new = tl.maximum(m, inp)
+            # Handle -inf case
+            all_neg_inf = m_new == float("-inf")
+            z = tl.where(all_neg_inf, z, z * tl.exp(m - m_new) + tl.exp(inp - m_new))
+            m = m_new
 
-    # Sum for normalization
-    denominator = tl.sum(numerator, axis=0)
+        m_reduced = tl.max(m, 0)
+        z = tl.sum(z * tl.exp(m - m_reduced), 0)
+        m = m_reduced
 
-    # Normalize
-    softmax_output = numerator / denominator
+        # Second pass: compute softmax output
+        for start_n in range(0, N, TILE_N):
+            n_offsets = start_n + tl.arange(0, TILE_N)
+            mask = n_offsets < N
+            inp = tl.load(input_ptr + n_offsets, mask=mask, other=float("-inf"))
+            o = tl.exp(inp - m) / z
+            tl.store(output_ptr + n_offsets, o, mask=mask)
 
-    # Store
-    output_row_start_ptr = output_ptr + row_idx * output_row_stride
-    output_ptrs = output_row_start_ptr + col_offsets
-    tl.store(output_ptrs, softmax_output, mask=mask)
+
+@triton.jit
+def softmax_kernel_non_inner(
+    output_ptr,
+    input_ptr,
+    M,
+    N,
+    K,
+    TILE_N: tl.constexpr,
+    TILE_K: tl.constexpr,
+    ONE_TILE_PER_CTA: tl.constexpr,
+):
+    """Softmax kernel for non-innermost dimension (K>1 case)."""
+    pid_k = tl.program_id(1)
+    pid_m = tl.program_id(0)
+
+    k_offsets = pid_k * TILE_K + tl.arange(0, TILE_K)
+
+    if ONE_TILE_PER_CTA:
+        n_offsets = tl.arange(0, TILE_N)
+        offset = pid_m * N * K + n_offsets[:, None] * K + k_offsets
+        mask = (n_offsets[:, None] < N) & (k_offsets < K)
+        input_ptrs = input_ptr + offset
+        inp = tl.load(input_ptrs, mask=mask, other=float("-inf"))
+        m = tl.max(inp, 0)
+        e = tl.exp(inp - m[None, :])
+        z = tl.sum(e, 0)
+        out = e / z
+        output_ptrs = output_ptr + offset
+        tl.store(output_ptrs, out, mask=mask)
+    else:
+        m = tl.full([TILE_N, TILE_K], value=float("-inf"), dtype=tl.float32)
+        z = tl.full([TILE_N, TILE_K], value=0.0, dtype=tl.float32)
+
+        # First pass: online softmax algorithm
+        for start_n in range(0, N, TILE_N):
+            n_offsets = start_n + tl.arange(0, TILE_N)
+            offsets = pid_m * N * K + n_offsets[:, None] * K + k_offsets
+            mask = (n_offsets[:, None] < N) & (k_offsets < K)
+            inp = tl.load(input_ptr + offsets, mask=mask, other=float("-inf"))
+            m_new = tl.maximum(m, inp)
+            all_neg_inf = m_new == float("-inf")
+            z = tl.where(all_neg_inf, z, z * tl.exp(m - m_new) + tl.exp(inp - m_new))
+            m = m_new
+
+        m_reduced = tl.max(m, 0)  # (TILE_K,)
+        z = tl.sum(z * tl.exp(m - m_reduced[None, :]), 0)  # (TILE_K, )
+        m = m_reduced
+
+        # Second pass: compute output
+        for start_n in range(0, N, TILE_N):
+            n_offsets = start_n + tl.arange(0, TILE_N)
+            offsets = pid_m * N * K + n_offsets[:, None] * K + k_offsets
+            mask = (n_offsets[:, None] < N) & (k_offsets[None, :] < K)
+            inp = tl.load(input_ptr + offsets, mask=mask, other=float("-inf"))
+            o = tl.exp(inp - m[None, :]) / z[None, :]
+            tl.store(output_ptr + offsets, o, mask=mask)
 
 
 def softmax(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
-    """Compute softmax along a dimension."""
+    """Compute softmax along a dimension (NPU-compatible).
+
+    Uses iterative online softmax algorithm that avoids explicit reduction ops.
+    """
     if dim < 0:
         dim = x.ndim + dim
 
-    # Permute to put softmax dim last
-    perm = list(range(x.ndim))
-    perm.remove(dim)
-    perm.append(dim)
-    x_permuted = x.permute(perm).contiguous()
+    assert dim >= 0 and dim < x.ndim, f"Invalid dim {dim}"
 
-    # Flatten batch dims
-    orig_shape = x_permuted.shape
-    n_rows = x_permuted.numel() // x_permuted.size(-1)
-    n_cols = x_permuted.size(-1)
-    x_flat = x_permuted.view(n_rows, n_cols)
+    # Compute M (product of dims before softmax dim), N (softmax dim), K (product of dims after)
+    M = 1
+    N = x.shape[dim]
+    for i in range(dim):
+        M *= x.shape[i]
+    K = x.numel() // M // N
 
-    # Allocate output
-    output = torch.empty_like(x_flat)
+    x = x.contiguous()
+    out = torch.empty_like(x)
 
-    # Compute block size (next power of 2 >= n_cols)
-    BLOCK_SIZE = triton.next_power_of_2(n_cols)
+    # Determine tile sizes
+    TILE_N = min(triton.next_power_of_2(N), 4096)
+    TILE_K = min(triton.next_power_of_2(K), 64) if K > 1 else 1
+    ONE_TILE_PER_CTA = TILE_N >= N
 
-    # Launch kernel
-    grid = (n_rows,)
-    with torch.cuda.device(x.device):
-        softmax_kernel[grid](
-            x_flat, output,
-            x_flat.stride(0), output.stride(0),
-            n_cols,
-            BLOCK_SIZE=BLOCK_SIZE,
-            num_warps=4,
-        )
+    try:
+        from torch.cuda import device as cuda_device
+        device_ctx = cuda_device(x.device)
+    except:
+        device_ctx = None
 
-    # Reshape and inverse permute
-    output = output.view(orig_shape)
-    inv_perm = [0] * len(perm)
-    for i, p in enumerate(perm):
-        inv_perm[p] = i
-    output = output.permute(inv_perm)
+    if K > 1:
+        # Non-inner dimension case
+        grid = (M, triton.cdiv(K, TILE_K), 1)
 
-    return output
+        if device_ctx:
+            with device_ctx:
+                softmax_kernel_non_inner[grid](
+                    out, x, M, N, K,
+                    TILE_N=TILE_N, TILE_K=TILE_K, ONE_TILE_PER_CTA=ONE_TILE_PER_CTA
+                )
+        else:
+            softmax_kernel_non_inner[grid](
+                out, x, M, N, K,
+                TILE_N=TILE_N, TILE_K=TILE_K, ONE_TILE_PER_CTA=ONE_TILE_PER_CTA
+            )
+    else:
+        # Inner dimension case - reshape to 2D for simplicity
+        x_flat = x.view(M, N)
+        out_flat = out.view(M, N)
+        grid = (M, 1, 1)
+
+        if device_ctx:
+            with device_ctx:
+                softmax_kernel_inner[grid](
+                    out_flat, x_flat, M, N,
+                    x_flat.stride(0), out_flat.stride(0),
+                    TILE_N=TILE_N, ONE_TILE_PER_CTA=ONE_TILE_PER_CTA,
+                    num_warps=4
+                )
+        else:
+            softmax_kernel_inner[grid](
+                out_flat, x_flat, M, N,
+                x_flat.stride(0), out_flat.stride(0),
+                TILE_N=TILE_N, ONE_TILE_PER_CTA=ONE_TILE_PER_CTA,
+                num_warps=4
+            )
+
+    return out
 
 
 if __name__ == "__main__":

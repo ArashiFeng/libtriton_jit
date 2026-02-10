@@ -142,13 +142,24 @@ at::Tensor sum_dim(const at::Tensor &self,
     auto [permuted_self, non_reduction_size, reduction_size] = permute_reduction_axes_right(self, dims_);
     permuted_self = permuted_self.contiguous();
 
-    // def sum_kernel(in_ptr, out_ptr, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, STAGE: tl.constexpr):
-    const TritonJITFunction &f = TritonJITFunction::get_instance("./sum.py", "sum_kernel");
-    int64_t tile_m = 4;
-    int64_t tile_n = 512;
-    const int num_warps = 8;
-    const int num_stages = 2;
-    const unsigned int num_blocks = (non_reduction_size + tile_m - 1) / tile_m;
+    // sum_dim_kernel(inp, out, M, N, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr)
+    const TritonJITFunction &f = TritonJITFunction::get_instance("./sum.py", "sum_dim_kernel");
+
+#if defined(BACKEND_NPU)
+    // NPU: smaller block sizes to avoid UB overflow
+    constexpr int64_t BLOCK_M = 4;
+    constexpr int64_t BLOCK_N = 256;
+    constexpr int num_warps = 1;
+    constexpr int num_stages = 1;
+#else
+    // CUDA/MUSA/IX: larger block sizes for better performance
+    constexpr int64_t BLOCK_M = 4;
+    constexpr int64_t BLOCK_N = 512;
+    constexpr int num_warps = 8;
+    constexpr int num_stages = 2;
+#endif
+
+    const unsigned int num_blocks = (non_reduction_size + BLOCK_M - 1) / BLOCK_M;
 
     // ------------------------- Kernel Launch ---------------------------------
     c10::DeviceGuard guard(out.device());
@@ -164,9 +175,8 @@ at::Tensor sum_dim(const at::Tensor &self,
       out,
       non_reduction_size,
       reduction_size,
-      tile_m,
-      tile_n,
-      num_stages);
+      BLOCK_M,
+      BLOCK_N);
     return out;
 }
 

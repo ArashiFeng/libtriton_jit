@@ -124,20 +124,32 @@ endfunction()
 # Common test framework
 add_subdirectory(common)
 
-# Pointwise operators
+# Pointwise operators (supported on all backends)
 add_subdirectory(pointwise)
+
+# ==============================================================================
+# Backend-specific operator support
+# NPU (Ascend) backend has limited support for reduce/normalization operations
+# due to BiShengHIR not supporting linalg.reduce operations
+# ==============================================================================
+
+# ==============================================================================
+# NPU backend: Enable all operators for validation
+# FlagGems Ascend has alternate implementations that may work on NPU
+# Individual operators will be skipped if compilation fails (NPU_SKIP_OPS)
+# ==============================================================================
 
 # Reduction operators
 add_subdirectory(reduce)
-
-# Matrix multiplication operators
-add_subdirectory(matmul)
-
-# Indexing operators
-add_subdirectory(index)
 
 # Normalization operators
 add_subdirectory(normalization)
 
 # Fusion operators
 add_subdirectory(fusion)
+
+# Matrix multiplication operators (supported on all backends)
+add_subdirectory(matmul)
+
+# Indexing operators (supported on all backends)
+add_subdirectory(index)
