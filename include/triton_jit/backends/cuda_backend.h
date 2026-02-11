@@ -29,6 +29,10 @@ struct CudaBackend {
     // CUDA warp size is 32 threads
     static constexpr unsigned int WARP_SIZE = 32;
 
+    struct LaunchOptions {
+        unsigned int shared_memory = 0;
+    };
+
     struct ModuleData {
         CUmodule module;
         CUfunction function;
@@ -38,13 +42,20 @@ struct CudaBackend {
     static inline std::unordered_map<std::string, ModuleData> module_cache_;
     static inline std::mutex cache_mutex_;
 
+    static LaunchOptions prepare_launch(
+        const std::string& /*dir*/, const std::string& /*name*/,
+        unsigned int shared_mem, const std::string& /*sig*/, size_t /*num_args*/)
+    {
+        return {.shared_memory = shared_mem};
+    }
+
     static void launch_kernel(
         CUstream stream,
         CUfunction kernel,
         unsigned grid_x, unsigned grid_y, unsigned grid_z,
         unsigned block_x, unsigned block_y, unsigned block_z,
         void** args,
-        unsigned int shared_memory = 0
+        const LaunchOptions& opts
     ) {
         LOG(INFO) << "cuLaunchKernel";
 
@@ -52,7 +63,7 @@ struct CudaBackend {
             kernel,
             grid_x, grid_y, grid_z,        // Grid dimensions
             block_x, block_y, block_z,     // Block dimensions
-            shared_memory,                 // Shared memory
+            opts.shared_memory,            // Shared memory
             stream,                        // Stream
             args,                          // Arguments
             nullptr                        // Extra

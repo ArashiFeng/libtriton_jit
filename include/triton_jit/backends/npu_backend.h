@@ -28,6 +28,14 @@ struct NpuBackend {
     // NPU does not use warp concept, but we need a non-zero value for block size calculation
     static constexpr unsigned int WARP_SIZE = 1;
 
+    struct LaunchOptions {
+        unsigned int shared_memory = 0;
+        std::string signature;
+        const std::vector<NpuArgInfo>* arg_layout = nullptr;
+        size_t num_args = 0;
+        size_t workspace_size = 0;
+    };
+
     struct ModuleData {
         void* bin_handle;
         void* fn_handle;
@@ -40,17 +48,36 @@ struct NpuBackend {
     static inline std::unordered_map<std::string, size_t> registered_names_;
     static inline std::unordered_map<std::string, std::unique_ptr<size_t>> func_stubs_;
 
+    static LaunchOptions prepare_launch(
+        const std::string& dir, const std::string& name,
+        unsigned int shared_mem, const std::string& sig, size_t num_args)
+    {
+        const auto* metadata = get_kernel_metadata(dir, name);
+        const auto* layout = (metadata && metadata->has_arg_layout())
+                             ? &(metadata->arg_layout)
+                             : nullptr;
+        size_t ws_size = metadata ? metadata->workspace_size : 0;
+
+        LOG(INFO) << fmt::format(
+            "NpuBackend::prepare_launch: kernel={}, metadata={}, workspace_size={}",
+            name, metadata ? "found" : "null", ws_size);
+
+        return {
+            .shared_memory = shared_mem,
+            .signature = sig,
+            .arg_layout = layout,
+            .num_args = num_args,
+            .workspace_size = ws_size,
+        };
+    }
+
     static void launch_kernel(
         aclrtStream stream,
         void* kernel,
         unsigned grid_x, unsigned grid_y, unsigned grid_z,
         unsigned block_x, unsigned block_y, unsigned block_z,
         void** args,
-        unsigned int shared_memory = 0,
-        const std::string& signature = "",
-        const std::vector<NpuArgInfo>* arg_layout = nullptr,
-        size_t num_args = 0,
-        size_t workspace_size = 0
+        const LaunchOptions& opts
     ) {
         uint32_t blockNum = grid_x * grid_y * grid_z;
 
@@ -66,21 +93,21 @@ struct NpuBackend {
 
         // Determine argument layout
         std::vector<NpuArgInfo> layout;
-        if (!signature.empty()) {
-            layout = parse_signature(signature);
+        if (!opts.signature.empty()) {
+            layout = parse_signature(opts.signature);
             LOG(INFO) << fmt::format("Parsed signature '{}' -> {} runtime args",
-                                    signature, layout.size());
-        } else if (arg_layout != nullptr && !arg_layout->empty()) {
-            layout = *arg_layout;
+                                    opts.signature, layout.size());
+        } else if (opts.arg_layout != nullptr && !opts.arg_layout->empty()) {
+            layout = *opts.arg_layout;
             LOG(INFO) << fmt::format("Using metadata arg_layout with {} args", layout.size());
         } else {
             throw std::runtime_error("launch_kernel: no signature or arg_layout provided");
         }
 
-        if (num_args != 0 && num_args != layout.size()) {
+        if (opts.num_args != 0 && opts.num_args != layout.size()) {
             throw std::runtime_error(fmt::format(
                 "launch_kernel: arg count mismatch (layout={}, args={})",
-                layout.size(), num_args));
+                layout.size(), opts.num_args));
         }
 
         // Build argument buffer dynamically
@@ -88,8 +115,8 @@ struct NpuBackend {
 
         // 1. Allocate workspace if needed
         void* workspace_addr = nullptr;
-        if (workspace_size > 0) {
-            size_t total_workspace = workspace_size * blockNum;
+        if (opts.workspace_size > 0) {
+            size_t total_workspace = opts.workspace_size * blockNum;
             rtError_t ws_ret = rtMalloc(&workspace_addr, total_workspace, RT_MEMORY_HBM, 0);
             if (ws_ret != RT_ERROR_NONE) {
                 throw std::runtime_error(fmt::format(
@@ -98,7 +125,7 @@ struct NpuBackend {
             }
             LOG(INFO) << fmt::format(
                 "NPU workspace allocated: {} bytes ({} per block x {} blocks)",
-                total_workspace, workspace_size, blockNum);
+                total_workspace, opts.workspace_size, blockNum);
         }
 
         // 2. Set system arguments (ffts, sync_lock, workspace)
@@ -133,7 +160,7 @@ struct NpuBackend {
         LOG(INFO) << fmt::format(
             "NPU launch_kernel: blockNum={}, arg_buffer_size={}, grid=({},{},{}), workspace={}",
             blockNum, arg_buffer.size(), grid_x, grid_y, grid_z,
-            workspace_addr ? fmt::format("{}B", workspace_size * blockNum) : "none");
+            workspace_addr ? fmt::format("{}B", opts.workspace_size * blockNum) : "none");
 
         // Launch kernel
         rtError_t rt_err = rtKernelLaunch(kernel,

@@ -15,21 +15,6 @@ namespace triton_jit {
 template<BackendPolicy Backend>
 class TritonJITFunctionImpl;
 
-// Forward declaration for NpuBackend detection
-struct NpuBackend;
-
-/**
- * @brief Type trait to check if Backend is NpuBackend
- */
-template<typename T>
-struct is_npu_backend : std::false_type {};
-
-template<>
-struct is_npu_backend<NpuBackend> : std::true_type {};
-
-template<typename T>
-inline constexpr bool is_npu_backend_v = is_npu_backend<T>::value;
-
 template<BackendPolicy Backend>
 class TritonKernelImpl {
 private:
@@ -57,7 +42,7 @@ public:
     TritonKernelImpl& operator=(TritonKernelImpl&&) = default;
 
     /**
-     * @brief Launch kernel (original interface for CUDA/IX compatibility)
+     * @brief Launch kernel (convenience wrapper with empty signature)
      */
     void launch(
         unsigned int grid_x,
@@ -67,13 +52,11 @@ public:
         typename Backend::StreamType stream,
         void** args
     ) const {
-        // For NPU backend, use the signature-based launch with empty signature
-        // This will trigger signature parsing if arg_layout is available
         launch_with_signature(grid_x, grid_y, grid_z, num_warps, stream, args, "");
     }
 
     /**
-     * @brief Launch kernel with signature for NPU backend
+     * @brief Launch kernel with signature
      *
      * @param signature Full signature string (e.g., "*fp32:16,*fp32,i64,1024")
      */
@@ -98,42 +81,19 @@ public:
         // Get shared memory size from backend
         unsigned int shared_memory = Backend::get_shared_memory(dir_, kernel_name_);
 
-        // Launch kernel using backend policy
-        if constexpr (is_npu_backend_v<Backend>) {
-            // NPU backend: pass signature and try to get arg_layout from metadata
-            const auto* metadata = Backend::get_kernel_metadata(dir_, kernel_name_);
-            const auto* arg_layout = (metadata && metadata->has_arg_layout())
-                                   ? &(metadata->arg_layout)
-                                   : nullptr;
-            size_t workspace_size = metadata ? metadata->workspace_size : 0;
+        // Prepare backend-specific launch options (no branching)
+        auto opts = Backend::prepare_launch(
+            dir_, kernel_name_, shared_memory, signature, num_args);
 
-            LOG(INFO) << fmt::format(
-                "TritonKernel launch: kernel={}, metadata={}, workspace_size={}",
-                kernel_name_, metadata ? "found" : "null", workspace_size);
-
-            Backend::launch_kernel(
-                stream,
-                kernel_handle_,
-                grid_x, grid_y, grid_z,
-                block_x, block_y, block_z,
-                args,
-                shared_memory,
-                signature,
-                arg_layout,
-                num_args,
-                workspace_size
-            );
-        } else {
-            // CUDA/IX backend: use standard launch
-            Backend::launch_kernel(
-                stream,
-                kernel_handle_,
-                grid_x, grid_y, grid_z,
-                block_x, block_y, block_z,
-                args,
-                shared_memory
-            );
-        }
+        // Launch kernel using backend policy (unified interface)
+        Backend::launch_kernel(
+            stream,
+            kernel_handle_,
+            grid_x, grid_y, grid_z,
+            block_x, block_y, block_z,
+            args,
+            opts
+        );
     }
 
     const std::string& get_dir() const {
