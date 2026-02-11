@@ -5,12 +5,11 @@
 
 namespace my_ops {
 
-void reshape_and_cache_flash(
-    const at::Tensor& key,
-    const at::Tensor& value,
-    at::Tensor& key_cache,
-    at::Tensor& value_cache,
-    const at::Tensor& slot_mapping);
+void reshape_and_cache_flash(const at::Tensor& key,
+                             const at::Tensor& value,
+                             at::Tensor& key_cache,
+                             at::Tensor& value_cache,
+                             const at::Tensor& slot_mapping);
 
 }  // namespace my_ops
 

@@ -7,18 +7,18 @@
 namespace my_ops {
 using namespace triton_jit;
 
-at::Tensor axpy(const at::Tensor &x, const at::Tensor &y, const c10::Scalar &alpha) {
+at::Tensor axpy(const at::Tensor& x, const at::Tensor& y, const c10::Scalar& alpha) {
   auto res = torch::broadcast_tensors({x, y});
   res[0] = res[0].contiguous();
   res[1] = res[1].contiguous();
-  const at::Tensor &xx = res[0];
-  const at::Tensor &yy = res[1];
+  const at::Tensor& xx = res[0];
+  const at::Tensor& yy = res[1];
 
   // TODO: consider weak-type of alpha here
   at::ScalarType out_dtype = at::promote_types(x.scalar_type(), y.scalar_type());
   at::Tensor out = at::empty(xx.sizes(), at::TensorOptions().dtype(out_dtype).device(x.device()));
 
-  const TritonJITFunction &f = TritonJITFunction::get_instance(std::string("axpy.py"), "axpy_kernel");
+  const TritonJITFunction& f = TritonJITFunction::get_instance(std::string("axpy.py"), "axpy_kernel");
 
   // add utility to build this automatically
   int64_t tile_size = 1024;
@@ -35,18 +35,18 @@ at::Tensor axpy(const at::Tensor &x, const at::Tensor &y, const c10::Scalar &alp
   return out;
 }
 
-at::Tensor axpy2(const at::Tensor &x, const at::Tensor &y, const std::optional<c10::Scalar> &alpha) {
+at::Tensor axpy2(const at::Tensor& x, const at::Tensor& y, const std::optional<c10::Scalar>& alpha) {
   auto res = torch::broadcast_tensors({x, y});
   res[0] = res[0].contiguous();
   res[1] = res[1].contiguous();
-  const at::Tensor &xx = res[0];
-  const at::Tensor &yy = res[1];
+  const at::Tensor& xx = res[0];
+  const at::Tensor& yy = res[1];
 
   // TODO: consider weak-type of alpha here
   at::ScalarType out_dtype = at::promote_types(x.scalar_type(), y.scalar_type());
   at::Tensor out = at::empty(xx.sizes(), at::TensorOptions().dtype(out_dtype).device(x.device()));
 
-  const TritonJITFunction &f = TritonJITFunction::get_instance(std::string("axpy.py"), "axpy2_kernel");
+  const TritonJITFunction& f = TritonJITFunction::get_instance(std::string("axpy.py"), "axpy2_kernel");
 
   // add utility to build this automatically
   int64_t tile_size = 1024;
@@ -63,9 +63,9 @@ at::Tensor axpy2(const at::Tensor &x, const at::Tensor &y, const std::optional<c
   return out;
 }
 
-at::Tensor axpy3(const at::Tensor &x,
-                 const std::optional<at::Tensor> &y,
-                 const std::optional<c10::Scalar> &alpha) {
+at::Tensor axpy3(const at::Tensor& x,
+                 const std::optional<at::Tensor>& y,
+                 const std::optional<c10::Scalar>& alpha) {
   at::Tensor out = [&]() {
     if (!y.has_value()) {
       return at::empty_like(x);
@@ -73,15 +73,15 @@ at::Tensor axpy3(const at::Tensor &x,
       auto res = torch::broadcast_tensors({x, y.value()});
       res[0] = res[0].contiguous();
       res[1] = res[1].contiguous();
-      const at::Tensor &xx = res[0];
-      const at::Tensor &yy = res[1];
+      const at::Tensor& xx = res[0];
+      const at::Tensor& yy = res[1];
 
       // TODO: consider weak-type of alpha here
       at::ScalarType out_dtype = at::promote_types(x.scalar_type(), y.value().scalar_type());
       return at::empty(xx.sizes(), at::TensorOptions().dtype(out_dtype).device(x.device()));
     }
   }();
-  const TritonJITFunction &f = TritonJITFunction::get_instance(std::string("axpy.py"), "axpy3_kernel");
+  const TritonJITFunction& f = TritonJITFunction::get_instance(std::string("axpy.py"), "axpy3_kernel");
 
   // add utility to build this automatically
   int64_t tile_size = 1024;

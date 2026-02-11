@@ -188,15 +188,11 @@ endif()
 add_subdirectory(src)
 
 # ==============================================================================
-# Examples (disabled)
+# Examples
 # ==============================================================================
-# if(TRITON_JIT_BUILD_EXAMPLES)
-#     set(INSTALL_GTEST OFF)
-#     github_url(GTEST_URL "google/googletest/archive/refs/tags/v1.16.0.tar.gz")
-#     FetchContent_Declare(googletest URL ${GTEST_URL} DOWNLOAD_EXTRACT_TIMESTAMP ON)
-#     FetchContent_MakeAvailable(googletest)
-#     add_subdirectory(examples)
-# endif()
+if(TRITON_JIT_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
 
 # ==============================================================================
 # Operators with Test Framework

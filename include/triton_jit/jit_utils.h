@@ -19,7 +19,7 @@
 
 namespace triton_jit {
 
-constexpr const char *to_triton_typename(c10::ScalarType t) {
+constexpr const char* to_triton_typename(c10::ScalarType t) {
   switch (t) {
     case c10::ScalarType::Float:
       return "fp32";
@@ -54,7 +54,7 @@ constexpr const char *to_triton_typename(c10::ScalarType t) {
 }
 
 template <typename T>
-constexpr const char *spec(T v) {
+constexpr const char* spec(T v) {
   return v % 16 == 0 ? ":16" : v == 1 ? ":1" : "";
 }
 
@@ -65,7 +65,7 @@ template <typename T>
 struct has_data_ptr<
     T,
     std::enable_if_t<std::conjunction_v<
-        std::is_same<decltype(std::declval<std::remove_reference_t<T>>().data_ptr()), void *>,
+        std::is_same<decltype(std::declval<std::remove_reference_t<T>>().data_ptr()), void*>,
         std::is_same<decltype(std::declval<std::remove_reference_t<T>>().scalar_type()), c10::ScalarType>>>>
     : std::true_type {};
 
@@ -97,7 +97,7 @@ struct is_same_ignore_cvref : public std::is_same<std::remove_reference_t<std::r
 #define DEFINE_TRITON_TYPE(T, Name)           \
   template <>                                 \
   struct triton_type_helper<T> {              \
-    static constexpr const char *name = Name; \
+    static constexpr const char* name = Name; \
   }
 
 DEFINE_TRITON_TYPE(bool, "i1");
@@ -121,13 +121,11 @@ std::filesystem::path get_script_dir();
 // ACL error checking function
 inline void checkAclErrors(aclError code, const char* message = "") {
   if (code != ACL_ERROR_NONE) {
-    const char *error_string = aclGetRecentErrMsg();
+    const char* error_string = aclGetRecentErrMsg();
     if (!error_string) {
       error_string = "Unknown AscendCL error";
     }
-    fprintf(stderr,
-            "AscendCL API error = %04d. Detail: <%s>. Message: %s\n",
-            code, error_string, message);
+    fprintf(stderr, "AscendCL API error = %04d. Detail: <%s>. Message: %s\n", code, error_string, message);
     throw std::runtime_error(std::string(message) + ": " + error_string);
   }
 }
@@ -135,9 +133,9 @@ inline void checkAclErrors(aclError code, const char* message = "") {
 #define checkMusaErrors(err) __checkMusaErrors(err, __FILE__, __LINE__)
 
 // Error handling function using exceptions instead of exit()
-inline void __checkMusaErrors(MUresult code, const char *file, const int line) {
+inline void __checkMusaErrors(MUresult code, const char* file, const int line) {
   if (code != MUSA_SUCCESS) {
-    const char *error_string;
+    const char* error_string;
     muGetErrorString(code, &error_string);
     fprintf(stderr,
             "MUSA Driver API error = %04d from file <%s>, line %i. Detail: <%s>\n",
@@ -154,9 +152,9 @@ void ensure_cuda_context();
 #define checkCudaErrors(err) __checkCudaErrors(err, __FILE__, __LINE__)
 
 // Error handling function using exceptions instead of exit()
-inline void __checkCudaErrors(CUresult code, const char *file, const int line) {
+inline void __checkCudaErrors(CUresult code, const char* file, const int line) {
   if (code != CUDA_SUCCESS) {
-    const char *error_string;
+    const char* error_string;
     cuGetErrorString(code, &error_string);
     fprintf(stderr,
             "CUDA Driver API error = %04d from file <%s>, line %i. Detail: <%s>\n",

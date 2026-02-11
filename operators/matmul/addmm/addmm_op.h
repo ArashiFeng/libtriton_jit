@@ -5,8 +5,11 @@
 
 namespace my_ops {
 
-at::Tensor addmm(const at::Tensor& input, const at::Tensor& a, const at::Tensor& b,
-                 const at::Scalar& beta, const at::Scalar& alpha);
+at::Tensor addmm(const at::Tensor& input,
+                 const at::Tensor& a,
+                 const at::Tensor& b,
+                 const at::Scalar& beta,
+                 const at::Scalar& alpha);
 
 }  // namespace my_ops
 

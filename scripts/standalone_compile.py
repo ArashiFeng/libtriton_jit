@@ -8,7 +8,7 @@ from typing import List, Tuple, Union
 # NPU and MTGPU require this before importing triton
 backend_env = os.environ.get("TRITON_JIT_BACKEND", "").upper()
 if backend_env in ["NPU", "MTGPU"]:
-    os.environ['TORCH_DEVICE_BACKEND_AUTOLOAD'] = '0'
+    os.environ["TORCH_DEVICE_BACKEND_AUTOLOAD"] = "0"
 
 import torch
 
@@ -22,9 +22,11 @@ if backend_env == "MTGPU":
 import triton
 from packaging.version import Version
 
+
 def get_backend():
     """Get backend from environment variable (set by C++ at runtime)."""
     return os.environ.get("TRITON_JIT_BACKEND", "CUDA").upper()
+
 
 # do not specifier a cache dir for libtriton jit now
 # pylint: disable-next=wrong-import-position
@@ -116,7 +118,9 @@ def sig_to_npu_type(sig: str) -> dict:
                 return {"type": "i64"}
 
 
-def generate_arg_layout(signature: List[str], constexpr_indices: List[int]) -> List[dict]:
+def generate_arg_layout(
+    signature: List[str], constexpr_indices: List[int]
+) -> List[dict]:
     """Generate arg_layout metadata from signature.
 
     Args:
@@ -371,26 +375,29 @@ def _compile_a_kernel(
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
 
-        print(f"[NPU] Generated arg_layout with {len(arg_layout)} runtime args: {arg_layout}")
+        print(
+            f"[NPU] Generated arg_layout with {len(arg_layout)} runtime args: {arg_layout}"
+        )
 
     # For MTGPU backend: Use official mtgpu.translate_llvmir_to_mubin() for compilation
     elif backend == "MTGPU":
-        from triton._C.libtriton import mtgpu
         import shutil
+
+        from triton._C.libtriton import mtgpu
 
         kernel_name = fn.__name__
         llir_path = Path(cache_dir) / f"{kernel_name}.llir"
 
         if llir_path.exists():
             try:
-                with open(llir_path, 'r') as f:
+                with open(llir_path, "r") as f:
                     llir_content = f.read()
 
                 # Compilation options (from official Triton MUSA backend compiler.py)
                 opt_option = "-mtgpu-enable-const-calc=1 -mtgpu-tiny-offset-hint=1 -mtgpu-alloc-shared-memory-from-zero=1"
 
                 # Get capability from target (default to 22 for S5000)
-                capability = getattr(target, 'arch', 22)
+                capability = getattr(target, "arch", 22)
                 if isinstance(capability, tuple):
                     capability = capability[0] * 10 + capability[1]
 
@@ -406,13 +413,16 @@ def _compile_a_kernel(
                 # Optionally save ASM for debugging
                 if os.environ.get("MUSA_ASM_ENABLE_DUMP", "0") == "1":
                     asm_path = Path(cache_dir) / f"{kernel_name}.asm"
-                    with open(asm_path, 'w') as f:
+                    with open(asm_path, "w") as f:
                         f.write(asm_str)
 
             except Exception as e:
-                import traceback
                 import sys
-                sys.stderr.write(f"[MTGPU] Compilation failed: {e}\n{traceback.format_exc()}\n")
+                import traceback
+
+                sys.stderr.write(
+                    f"[MTGPU] Compilation failed: {e}\n{traceback.format_exc()}\n"
+                )
 
     return cache_dir
 

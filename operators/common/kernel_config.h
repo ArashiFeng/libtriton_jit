@@ -12,8 +12,8 @@ struct MatmulConfig {
   int64_t BLOCK_N;
   int64_t BLOCK_K;
   int64_t GROUP_M;
-  int     num_warps;
-  int     num_stages;
+  int num_warps;
+  int num_stages;
 };
 
 inline constexpr MatmulConfig default_matmul_config() {
@@ -28,8 +28,8 @@ inline constexpr MatmulConfig default_matmul_config() {
 struct ReduceSumConfig {
   int64_t BLOCK_M;
   int64_t BLOCK_N;
-  int     num_warps;
-  int     num_stages;
+  int num_warps;
+  int num_stages;
 };
 
 inline constexpr ReduceSumConfig default_reduce_sum_config() {
@@ -43,8 +43,8 @@ inline constexpr ReduceSumConfig default_reduce_sum_config() {
 // ---- Softmax config ----
 struct SoftmaxConfig {
   int64_t max_tile_n;
-  int     num_warps;
-  int     num_stages;
+  int num_warps;
+  int num_stages;
 };
 
 inline constexpr SoftmaxConfig default_softmax_config() {
@@ -58,8 +58,8 @@ inline constexpr SoftmaxConfig default_softmax_config() {
 // ---- Norm config (fused_add_rms_norm) ----
 struct NormConfig {
   int64_t max_block_size;  // 0 = no limit
-  int     num_warps;
-  int     num_stages;
+  int num_warps;
+  int num_stages;
 };
 
 inline constexpr NormConfig default_norm_config() {
@@ -74,8 +74,8 @@ inline constexpr NormConfig default_norm_config() {
 struct RotaryConfig {
   int64_t BLOCK_N;
   int64_t BLOCK_H;
-  int     num_warps;
-  int     num_stages;
+  int num_warps;
+  int num_stages;
 };
 
 inline constexpr RotaryConfig default_rotary_config() {

@@ -5,9 +5,10 @@
 
 namespace my_ops {
 
-std::tuple<at::Tensor, at::Tensor> fused_add_rms_norm(
-    const at::Tensor& input, const at::Tensor& residual, 
-    const at::Tensor& weight, double eps);
+std::tuple<at::Tensor, at::Tensor> fused_add_rms_norm(const at::Tensor& input,
+                                                      const at::Tensor& residual,
+                                                      const at::Tensor& weight,
+                                                      double eps);
 
 }  // namespace my_ops
 
