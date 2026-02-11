@@ -33,12 +33,17 @@ class TestRunner:
     ]
 
     OPERATORS = {
-        "pointwise": ["add", "fill", "zeros", "exponential_", "contiguous"],
-        "reduce": ["sum", "topk"],  # max/argmax disabled: linalg.reduce not supported on NPU
+        "pointwise": ["add", "fill", "fill_", "zeros", "exponential_", "contiguous"],
+        "reduce": ["sum", "max", "argmax", "topk"],
         "matmul": ["mm", "bmm", "addmm"],
         "index": ["embedding", "nonzero", "cat", "reshape_and_cache_flash"],
         "normalization": ["softmax", "rms_norm", "fused_add_rms_norm"],
         "fusion": ["apply_rotary_pos_emb", "rwkv_ka_fusion", "rwkv_mm_sparsity"],
+    }
+
+    # Operators excluded per backend (linalg.reduce with indices not supported on NPU)
+    BACKEND_EXCLUSIONS = {
+        "NPU": ["max", "argmax"],
     }
 
     def __init__(self, build_dir: str, backend: str, timeout: int = 300):
@@ -114,6 +119,8 @@ class TestRunner:
                 continue
 
             ops = self.OPERATORS[category]
+            excluded = self.BACKEND_EXCLUSIONS.get(self.backend, [])
+            ops = [op for op in ops if op not in excluded]
             if operators:
                 ops = [op for op in ops if op in operators]
 
